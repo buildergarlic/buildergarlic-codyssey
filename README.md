@@ -1,12 +1,23 @@
 ## 1. 실행환경
 - OS: 윈도우즈 11 버전 26H2 (OS 빌드 26300.9711) with WSL2
-- OS Sub System: WSL(Windows Subsystme for Linux) 2
+- OS Sub System: WSL(Windows Subsystme for Linux) 2 -> Ubuntu-22.04
 - Shell: bash
 - Docker: Docker version 29.9.2, build a82e528
 - Docker Desktop: version 4.98.0
 - Git: git version 2.56.0.windows.4
 
-## 2. 설치 진행
+## 2. 수행 체크리스트
+- [x] 터미널 기본 조작 및 폴더 구성
+- [x] 권한 변경 실습
+- [x] Docker 설치/점검
+- [x] hello-world 실행
+- [x] Dockerfile 빌드/실행
+- [x] 포트 매핑 접속(2회)
+- [x] 바인드 마운트 반영
+- [x] 볼륨 영속성
+- [x] Git 설정 + VSCode GitHub 연동
+
+## 3. 설치 진행과 수행 로그(핵심 발췌)
 2-1. WSL2 활성화
 wsl --install --no-distribution
 백엔드 엔진만 활성화
@@ -14,6 +25,9 @@ wsl --install --no-distribution
 2-1-1. 왜 WSL 설치?
 - Windows 11에서 Windows용 Docker Desktop을 설치할 때 WSL2(Windows Subsystem for Linux 2)는 사실상 필수입니다. 단, 사용자가 직접 Ubuntu 배포판을 따로 설치할 필요는 없습니다.
 - 도커의 태생적 구조: 도커 컨테이너(Linux 컨테이너)는 Linux 커널의 핵심 기능(Cgroups, Namespaces)을 공유하여 작동합니다. Windows 커널에는 이 기능이 직접 들어있지 않으므로, 백그라운드에서 경량 Linux 커널을 띄워줄 가상화 계층(WSL2)이 반드시 필요합니다.
+
+- Windows의 기본 파일 시스템(NTFS)이나 Git Bash(MinGW)에서는 리눅스의 8진수 권한(chmod 700 등)이 정상적으로 반영되지 않아 과제 검증(요구사항 4-3)에서 결함이 발생합니다. 또한 WSL2의 /mnt/c/... 경로(Windows 호스트 마운트 경로)에서 작업할 경우에도 권한 변경이 무시되거나 Docker 바인드 마운트 I/O 성능 저하가 발생하므로, 반드시 WSL2 내부의 리눅스 네이티브 홈 디렉토리(~ 또는 /home/<계정명>)에서 모든 실습을 진행해야 합니다.
+*(참고: 미션 안내문의 OrbStack은 macOS 전용 도구이므로, Windows 11에서는 Docker Desktop (WSL2 백엔드 모드)*으로 대체하여 구동합니다.)
 
 2-1-2. WSL vs WSL2
 - WSL 1은 윈도우가 리눅스 흉내를 내는 번역기라면, WSL 2는 윈도우 안에 진짜 리눅스 커널을 통째로 집어넣은 가상 머신입니다.
