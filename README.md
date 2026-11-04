@@ -51,3 +51,18 @@ remote: fatal error in commit_refs
 To https://github.com/buildergarlic/buildergarlic-codyssey.git
  ! [remote rejected] main -> main (failure)
 error: failed to push some refs to 'https://github.com/buildergarlic/buildergarlic-codyssey.git'
+
+해결 방법
+1단계: 원격 저장소 연결 상태 확인 및 갱신:1분.현재 연결된 원격 저장소 주소가 올바른지 확인하고 연결을 새로고침합니다.PowerShellgit remote -v
+주소가 [https://github.com/buildergarlic/buildergarlic-codyssey.git](https://github.com/buildergarlic/buildergarlic-codyssey.git)로 정확히 나오는지 확인한 뒤, 연결을 재설정합니다.PowerShellgit remote set-url origin https://github.com/buildergarlic/buildergarlic-codyssey.git
+Verification: 오류 없이 명령어가 실행되면 연결 정보가 갱신된 것입니다.
+
+2단계: 가비지 컬렉션(Garbage Collection) 실행:1분.로컬 Git 데이터베이스가 손상되었거나 일시적으로 꼬인 경우 내부 저장소를 정리하여 해결할 수 있습니다.PowerShellgit gc --prune=now
+Verification: 최적화 작업이 완료되고 프롬프트가 정상적으로 돌아오면 성공입니다.
+
+3단계: 강제 푸시 대신 안전하게 다시 푸시 시도:1분.서버와 로컬의 커밋 히스토리를 맞추기 위해 일반 푸시를 다시 시도합니다.PowerShellgit push -u origin main --force-with-lease
+Verification: Everything up-to-date 또는 Writing objects... Done 메시지와 함께 
+
+*GitHub에 정상적으로 업로드되는지 확인합니다.대용량 파일 주의프로젝트 폴더 내에 100MB가 넘는 대용량 파일(동영상, 빌드 결과물 등)이 포함되어 있는지 확인해 보세요. GitHub는 개별 파일이 100MB를 초과하면 원격 거부(remote rejected) 오류를 발생시킵니다.
+
+![docker.desktop choose VMM 설정 - WSL 2](image.png)
