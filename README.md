@@ -40,7 +40,14 @@ PS D:\buildergarlic-codyssey> git config --global buildergarlic@gmail.com
 error: invalid key: buildergarlic@gmail.com
 PS D:\buildergarlic-codyssey> 
 
-#git user setting 트러블슈팅(Troubleshooting)
+#트러블슈팅(Troubleshooting) No.1 - git user setting 
 PS D:\buildergarlic-codyssey> git config --global user.email "buildergarlic@gmail.com"
 PS D:\buildergarlic-codyssey> git config --global user.email "buildergarlic@gmail.com"
 PS D:\buildergarlic-codyssey> 
+
+# 트러블슈팅(Troubleshooting) No.2 - > git push -u origin main
+> git push -u origin main
+remote: fatal error in commit_refs        
+To https://github.com/buildergarlic/buildergarlic-codyssey.git
+ ! [remote rejected] main -> main (failure)
+error: failed to push some refs to 'https://github.com/buildergarlic/buildergarlic-codyssey.git'
