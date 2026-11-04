@@ -1,3 +1,615 @@
+# Windows 11 · WSL2 · Docker Workstation Mission
+
+Windows 11에서 WSL2와 Docker Desktop을 구성하고, Linux 파일 조작·권한 변경부터 Docker 이미지 빌드, 포트 매핑, 마운트, 볼륨 영속성, Git 연동까지 검증한 기록입니다.
+
+> 검증 일자: 2026-11-04 (KST)
+> 아래 “실제 실행 로그”에는 터미널에서 확인한 출력만 기록했습니다. 설치·장애 대응 명령은 “재현 절차”로 구분했습니다.
+
+## 1. 평가 항목별 증거
+
+| 평가 | 증거 위치 |
+|---:|---|
+| 1 | 4절: <code>mkdir</code>, <code>touch</code>, <code>cp</code>, <code>mv</code>, <code>rm</code> 실행 전후 목록과 시각 |
+| 2 | 5절: <code>chmod 755/700</code> 전후 <code>ls -ld</code> 출력 |
+| 3 | 6절: Docker Client/Server 버전, <code>docker info</code> Server 값, Engine running 화면 |
+| 4 | 6절: <code>docker run hello-world</code>의 <code>Hello from Docker!</code> 출력 |
+| 5 | 6절: 필터 없는 <code>docker images</code>, <code>docker ps -a</code> 출력 |
+| 6 | 7절: 저장소의 실제 [Dockerfile](./Dockerfile), 웹 소스, 성공 빌드 로그 |
+| 7 | 7절: <code>localhost:8080</code>의 HTTP 200 응답과 브라우저 화면 |
+| 8 | 8절: 볼륨 기록 → 컨테이너 삭제 → 새 컨테이너에서 파일 복구 로그 |
+| 9 | 10절: Git 사용자 설정, 원격 주소, 로컬/원격 추적 상태 |
+| 10 | 3절: 디렉터리 설계 기준과 각 파일·폴더 역할 |
+| 11 | 7·8절: 호스트:컨테이너 포트/경로 매핑 명세와 명령 순서 |
+| 12 | 6절: 이미지(저장 템플릿)와 컨테이너(실행 인스턴스)의 차이 |
+| 13 | 6절: 네트워크 네임스페이스와 포트 포워딩의 필요성 |
+| 14 | 4절: 절대경로·상대경로 사용 기준과 예시 |
+| 15 | 5절: rwx와 숫자 0~7 전체 매핑 |
+| 16 | 9절: <code>ss</code>/<code>lsof</code>/Docker 조회 및 안전한 포트 해제 |
+| 17 | 8절: 바인드 마운트와 Docker 볼륨 장단점·사용 사례 비교 |
+| 18 | 10절: 실제 Git 오류, 조치 순서, 조치 후 원격 추적 상태 |
+
+## 2. 실행 환경
+
+| 구분 | 확인값 |
+|---|---|
+| Host OS | Windows 11 |
+| Linux | WSL2 · Ubuntu 22.04.5 LTS |
+| WSL2 Kernel | Linux 6.18.54.1-microsoft-standard-WSL2 |
+| Shell | GNU bash 5.1.16 |
+| Docker Desktop | 4.98.0, WSL2 backend |
+| Docker Engine | 29.9.2, linux/amd64 |
+| Git | 2.34.1 (WSL2 Ubuntu) |
+
+최초 설치 재현 순서:
+
+~~~powershell
+# 관리자 PowerShell
+wsl --install -d Ubuntu-22.04
+wsl -l -v
+winget install Docker.DockerDesktop
+~~~
+
+Docker Desktop에서 Settings → General → Use the WSL 2 based engine과 Settings → Resources → WSL Integration → Ubuntu-22.04를 활성화한 뒤 Apply & restart를 실행합니다.
+
+## 3. 디렉터리 구조와 설계 기준
+
+~~~text
+buildergarlic-codyssey/
+├── .dockerignore
+├── Dockerfile
+├── README.md
+├── app/
+│   └── index.html
+└── screenshots/
+    ├── container-webserver.png
+    ├── docker.desktop-WSL2-Setting.png
+    ├── vscode-github.png
+    └── Websever-NginX-Container.png
+~~~
+
+| 경로 | 역할 |
+|---|---|
+| [Dockerfile](./Dockerfile) | Nginx 기반 커스텀 이미지 빌드 명세 |
+| [.dockerignore](./.dockerignore) | Git 문서·스크린샷 등 불필요한 빌드 컨텍스트 제외 |
+| [app/](./app) | 컨테이너가 서비스할 애플리케이션 소스 |
+| [app/index.html](./app/index.html) | Nginx 정적 시작 페이지 |
+| [screenshots/](./screenshots) | 브라우저, Docker Desktop, VS Code 검증 화면 |
+| [README.md](./README.md) | 재현 절차, 실제 출력, 개념과 트러블슈팅 기록 |
+
+실행 자산([Dockerfile](./Dockerfile), [app/](./app))과 문서·증거([README.md](./README.md), [screenshots/](./screenshots))를 분리했습니다. 저장소 루트를 빌드 컨텍스트로 사용하므로 <code>docker build .</code>의 <code>COPY ./app ...</code>가 같은 구조로 동작합니다. 권한 실습용 <code>test_dir/</code>는 임시 디렉터리라 제출 구조에서 제외했습니다.
+
+## 4. 경로 기준과 파일·폴더 조작
+
+### 절대경로와 상대경로
+
+- 절대경로는 현재 디렉터리와 관계없이 같은 대상을 가리킵니다. 작업 위치 검증이나 바인드 마운트 원본처럼 경로 오류가 치명적인 곳에 사용합니다. 예: <code>/home/buildergarlic/workstation-mission/app</code>
+- 상대경로는 현재 <code>pwd</code>를 기준으로 해석됩니다. 프로젝트 루트로 이동한 뒤 내부 파일을 다룰 때 사용합니다. 예: <code>./app</code>, <code>app/index.html</code>, <code>docker build .</code>
+- “WSL2 홈을 사용한다”는 프로젝트 저장 위치 기준입니다. 모든 명령 인자까지 절대경로로 써야 한다는 뜻은 아닙니다.
+
+Linux 권한과 빠른 바인드 마운트 I/O 검증을 위해 원본 실습은 Windows 마운트 영역인 <code>/mnt/c</code>가 아니라 WSL2 네이티브 경로인 <code>/home/buildergarlic/workstation-mission</code>에서 수행했습니다.
+
+### 파일 생성·복사·이동·삭제 실제 로그
+
+~~~console
+[2026-11-04 20:59~21:03 KST, WSL2 Bash]
+
+$ mkdir -p ~/workstation-mission
+$ cd ~/workstation-mission
+$ mkdir test_dir
+$ touch empty_file.txt
+$ echo "Hello Windows 11 WSL2 Workstation" > sample.txt
+$ ls -la
+total 16
+drwxr-xr-x 3 buildergarlic buildergarlic 4096 Nov  4 21:00 .
+drwxr-x--- 6 buildergarlic buildergarlic 4096 Nov  4 20:54 ..
+-rw-r--r-- 1 buildergarlic buildergarlic    0 Nov  4 20:59 empty_file.txt
+-rw-r--r-- 1 buildergarlic buildergarlic   34 Nov  4 21:00 sample.txt
+drwxr-xr-x 2 buildergarlic buildergarlic 4096 Nov  4 20:59 test_dir
+
+$ cp sample.txt sample_copy.txt
+$ mv sample_copy.txt test_dir/moved_sample.txt
+$ ls -l test_dir/
+total 4
+-rw-r--r-- 1 buildergarlic buildergarlic 34 Nov  4 21:03 moved_sample.txt
+
+$ rm empty_file.txt
+$ ls -la
+total 16
+drwxr-xr-x 3 buildergarlic buildergarlic 4096 Nov  4 21:03 .
+drwxr-x--- 6 buildergarlic buildergarlic 4096 Nov  4 20:54 ..
+-rw-r--r-- 1 buildergarlic buildergarlic   34 Nov  4 21:00 sample.txt
+drwxr-xr-x 2 buildergarlic buildergarlic 4096 Nov  4 21:03 test_dir
+~~~
+
+마지막 목록에서 <code>empty_file.txt</code>는 사라졌고, 이동된 파일은 <code>test_dir/moved_sample.txt</code>에 존재하므로 생성·이동·삭제가 모두 검증됩니다.
+
+## 5. Linux 권한 변경
+
+각 8진수 자리는 차례로 소유자(User), 그룹(Group), 기타 사용자(Others)의 권한입니다. 한 자리 값은 <code>r=4</code>, <code>w=2</code>, <code>x=1</code>의 합입니다.
+
+| 숫자 | 기호 | 허용 권한 |
+|---:|:---:|---|
+| 0 | <code>---</code> | 없음 |
+| 1 | <code>--x</code> | 실행 |
+| 2 | <code>-w-</code> | 쓰기 |
+| 3 | <code>-wx</code> | 쓰기 + 실행 |
+| 4 | <code>r--</code> | 읽기 |
+| 5 | <code>r-x</code> | 읽기 + 실행 |
+| 6 | <code>rw-</code> | 읽기 + 쓰기 |
+| 7 | <code>rwx</code> | 읽기 + 쓰기 + 실행 |
+
+예를 들어 755는 소유자 <code>rwx</code>, 그룹 <code>r-x</code>, 기타 사용자 <code>r-x</code>이고, 700은 소유자만 모든 권한을 가집니다. 디렉터리의 <code>x</code>는 그 안으로 진입·탐색할 권한입니다.
+
+### 변경 전·후 실제 로그
+
+~~~console
+[2026-11-04 21:03 KST, /home/buildergarlic/workstation-mission]
+
+$ ls -ld test_dir sample.txt
+-rw-r--r-- 1 buildergarlic buildergarlic   34 Nov  4 21:00 sample.txt
+drwxr-xr-x 2 buildergarlic buildergarlic 4096 Nov  4 21:03 test_dir
+
+$ chmod 755 sample.txt
+$ chmod 700 test_dir
+$ ls -ld test_dir sample.txt
+-rwxr-xr-x 1 buildergarlic buildergarlic   34 Nov  4 21:00 sample.txt
+drwx------ 2 buildergarlic buildergarlic 4096 Nov  4 21:03 test_dir
+~~~
+
+파일은 644 → 755, 디렉터리는 755 → 700으로 바뀌었습니다. <code>/mnt/c</code>의 NTFS/DrvFs는 설정에 따라 POSIX 권한 변경을 그대로 보존하지 않을 수 있으므로 이 검증은 WSL2의 Linux 파일 시스템에서 수행했습니다.
+
+## 6. Docker 데몬, 이미지와 컨테이너
+
+### 이미지와 컨테이너의 역할
+
+Docker 이미지는 [Dockerfile](./Dockerfile)과 소스를 빌드한 읽기 전용 실행 템플릿, 즉 저장 결과입니다. 컨테이너는 그 이미지로 만든 실행 인스턴스입니다.
+
+- <code>docker build -t custom-nginx:1.0 .</code>: 재사용할 이미지를 저장합니다.
+- <code>docker run custom-nginx:1.0</code>: 이미지로 새 컨테이너를 생성하고 실행합니다.
+- 컨테이너의 쓰기 계층을 수정해도 원본 이미지는 바뀌지 않습니다. 변경을 이미지에 포함하려면 다시 빌드해야 합니다.
+- 컨테이너를 삭제하면 쓰기 계층도 사라집니다. 보존할 데이터는 바인드 마운트나 Docker 볼륨에 둡니다.
+
+### 네트워크 네임스페이스와 포트 포워딩
+
+컨테이너는 호스트와 분리된 네트워크 네임스페이스(IP, 인터페이스, 포트 공간)를 가집니다. 따라서 컨테이너 내부 Nginx가 TCP 80에서 대기해도 호스트에서 그 포트에 바로 접속할 수 없습니다.
+
+<code>-p 8080:80</code>은 호스트 TCP 8080 요청을 컨테이너 TCP 80으로 전달하므로 호스트에서는 <code>http://localhost:8080</code>으로 접속합니다. [Dockerfile](./Dockerfile)의 <code>EXPOSE 80</code>은 사용할 포트를 문서화할 뿐 실제로 호스트에 공개하지 않으며, 공개에는 <code>-p</code>가 필요합니다.
+
+### Docker Client와 Server(데몬) 실제 확인
+
+Docker Desktop이 엔진을 관리하므로 WSL2 내부의 <code>systemctl status docker</code> 대신 <code>docker version</code>의 Server 구간과 <code>docker info</code>의 Server 값을 확인했습니다.
+
+~~~console
+[2026-11-04 22:40 KST, PowerShell]
+
+PS> docker version
+Client:
+ Version:           29.9.2
+ API version:       1.56
+ OS/Arch:           windows/amd64
+ Context:           desktop-linux
+
+Server: Docker Desktop 4.98.0 (245422)
+ Engine:
+  Version:          29.9.2
+  API version:      1.56 (minimum version 1.40)
+  OS/Arch:          linux/amd64
+  Experimental:     false
+
+PS> docker info --format "ServerVersion={{.ServerVersion}}; OSType={{.OSType}}; OperatingSystem={{.OperatingSystem}}; Containers={{.Containers}}; Images={{.Images}}"
+ServerVersion=29.9.2; OSType=linux; OperatingSystem=Docker Desktop; Containers=2; Images=4
+~~~
+
+Server 값이 반환되었다는 것은 CLI가 실제 데몬 소켓에 연결되어 질의를 완료했다는 뜻입니다.
+
+![Docker Desktop WSL2 backend와 Engine running](./screenshots/docker.desktop-WSL2-Setting.png)
+
+### hello-world 실제 출력
+
+~~~console
+[2026-11-04 KST, WSL2 Bash]
+
+$ docker run hello-world
+Unable to find image 'hello-world:latest' locally
+latest: Pulling from library/hello-world
+4f55086f7dd0: Pull complete
+d5e71e642bf5: Download complete
+Digest: sha256:c567b231f65614688711a75f31518a064258a51d442117a3e771a3a8fdba78ef
+Status: Downloaded newer image for hello-world:latest
+
+Hello from Docker!
+This message shows that your installation appears to be working correctly.
+
+To generate this message, Docker took the following steps:
+ 1. The Docker client contacted the Docker daemon.
+ 2. The Docker daemon pulled the "hello-world" image from the Docker Hub.
+ 3. The Docker daemon created a new container from that image.
+ 4. The Docker daemon streamed that output to the Docker client.
+~~~
+
+### 이미지와 전체 컨테이너 목록
+
+~~~console
+[2026-11-04 22:41:11+09:00, PowerShell]
+
+PS> docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}"
+REPOSITORY     TAG       IMAGE ID       SIZE
+custom-nginx   1.0       cce00524d0bf   93.6MB
+ubuntu         22.04     076e7bf82319   119MB
+alpine         latest    be2656061b53   13MB
+hello-world    latest    c567b231f656   25.9kB
+
+PS> docker ps -a --format "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}\t{{.Names}}"
+CONTAINER ID   IMAGE              STATUS                             PORTS                                     NAMES
+a3ed518fc940   custom-nginx:1.0   Up 27 seconds (health: starting)   0.0.0.0:8080->80/tcp, [::]:8080->80/tcp   web-server
+415d6191fc85   ubuntu:22.04       Exited (137) About an hour ago                                               my-ubuntu
+0692d7cb1287   hello-world        Exited (0) About an hour ago                                                 romantic_rhodes
+~~~
+
+## 7. 커스텀 이미지 빌드와 포트 매핑
+
+### 실제 제출 파일
+
+[Dockerfile](./Dockerfile)의 내용:
+
+~~~dockerfile
+FROM nginx:alpine
+
+LABEL maintainer="buildergarlic"
+
+COPY ./app /usr/share/nginx/html
+
+EXPOSE 80
+
+HEALTHCHECK --interval=30s --timeout=3s \
+  CMD wget -qO- http://localhost/ || exit 1
+~~~
+
+서비스할 HTML은 [app/index.html](./app/index.html)에 실제 파일로 제출했습니다.
+
+### 실제 빌드 로그
+
+~~~console
+[2026-11-04T22:40:33+09:00, 저장소 루트]
+
+PS> docker build -t custom-nginx:1.0 .
+#0 building with "desktop-linux" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 223B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/nginx:alpine
+#2 DONE 1.4s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 78B done
+#3 DONE 0.0s
+
+#4 [internal] load build context
+#4 transferring context: 350B done
+#4 DONE 0.0s
+
+#5 [1/2] FROM docker.io/library/nginx:alpine@sha256:785835ea65db4bba6f021acc0f3be91b0fef76a53fe41f8588c6698d2aed0606
+#5 CACHED
+
+#6 [2/2] COPY ./app /usr/share/nginx/html
+#6 DONE 0.0s
+
+#7 exporting to image
+#7 exporting layers 0.1s done
+#7 naming to docker.io/library/custom-nginx:1.0 done
+#7 unpacking to docker.io/library/custom-nginx:1.0 done
+#7 DONE 0.2s
+~~~
+
+### 매핑 명세와 재현 순서
+
+Docker의 매핑 표기는 <code>호스트:컨테이너</code> 순서입니다.
+
+| 목적 | 실행 옵션 | 호스트 측 | 컨테이너 측 |
+|---|---|---|---|
+| 기본 웹 서버 | <code>-p 8080:80</code> | TCP 8080 | Nginx TCP 80 |
+| 바인드 마운트 웹 서버 | <code>-p 8081:80</code> | TCP 8081 | Nginx TCP 80 |
+| 웹 소스 공유 | <code>$(pwd)/app:/usr/share/nginx/html</code> | 프로젝트 app 디렉터리 | Nginx 문서 루트 |
+| 영속 데이터 | <code>mission-vol:/data</code> | Docker 관리 볼륨 | 컨테이너 /data |
+
+~~~bash
+cd ~/workstation-mission
+docker build -t custom-nginx:1.0 .
+docker run -d --name web-server -p 8080:80 custom-nginx:1.0
+curl -i http://localhost:8080
+docker inspect --format '{{.State.Health.Status}}' web-server
+docker stop web-server
+docker rm web-server
+~~~
+
+### 호스트 포트 접속 실제 로그
+
+~~~console
+[2026-11-04T22:40:44+09:00, PowerShell]
+
+PS> docker run -d --name web-server -p 8080:80 custom-nginx:1.0
+a3ed518fc940821d98a11e5192958af2fc0f1593291dae75db20898775d97a27
+
+PS> curl.exe -i http://localhost:8080
+HTTP/1.1 200 OK
+Server: nginx/1.31.8
+Date: Wed, 04 Nov 2026 13:40:46 GMT
+Content-Type: text/html
+Content-Length: 280
+Connection: keep-alive
+
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <title>Workstation Mission</title>
+</head>
+<body>
+  <h1>Custom Nginx Container on Windows 11 (WSL2)</h1>
+  <p>Version 1.0</p>
+</body>
+</html>
+
+PS> docker inspect --format "Health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" web-server
+Health=healthy
+~~~
+
+HTTP 200과 HTML 본문, 컨테이너 healthy 상태를 모두 확인했습니다.
+
+![localhost 8080 Nginx 응답](./screenshots/Websever-NginX-Container.png)
+
+## 8. 바인드 마운트와 볼륨 영속성
+
+### 두 방식의 차이
+
+| 방식 | 장점 | 주의점과 적합 사례 |
+|---|---|---|
+| 바인드 마운트 | 지정한 호스트 파일을 컨테이너와 직접 공유해 수정 결과가 즉시 반영됩니다. | 호스트 경로·권한에 의존합니다. 개발 중인 소스·설정 공유에 적합합니다. |
+| Docker 볼륨 | Docker가 저장 위치를 관리하며 컨테이너를 삭제해도 <code>docker volume rm</code> 전까지 데이터가 남습니다. | 호스트에서 직접 편집하기는 덜 편하지만 DB·애플리케이션 상태 보존에 적합합니다. |
+
+### 바인드 마운트 즉시 반영 실제 로그
+
+~~~console
+[2026-11-04 KST, WSL2 Bash]
+
+$ docker run -d --name bind-web -p 8081:80 \
+    -v "$(pwd)/app:/usr/share/nginx/html" custom-nginx:1.0
+ebd5ee3377b74a813864dd32ea29f8c11a4681c45e84cc7a1bafaa031bb333f3
+
+$ curl http://localhost:8081
+<!DOCTYPE html>
+<html>
+<body>
+  <h1>Custom Nginx Container on Windows 11 (WSL2)</h1>
+  <p>Version 1.0</p>
+</body>
+</html>
+
+$ sed -i 's/Version 1.0/Version 2.0 (Bind Mounted on WSL2)/g' app/index.html
+$ curl http://localhost:8081
+<!DOCTYPE html>
+<html>
+<body>
+  <h1>Custom Nginx Container on Windows 11 (WSL2)</h1>
+  <p>Version 2.0 (Bind Mounted on WSL2)</p>
+</body>
+</html>
+
+$ docker stop bind-web
+bind-web
+$ docker rm bind-web
+bind-web
+~~~
+
+이미지를 다시 빌드하지 않았는데도 호스트 파일의 1.0 → 2.0 변경이 컨테이너 응답에 즉시 반영되었습니다.
+
+### 볼륨의 컨테이너 삭제 전·후 실제 로그
+
+~~~console
+[2026-11-04 KST, WSL2 Bash]
+
+$ docker volume create mission-vol
+mission-vol
+
+$ docker volume ls | grep mission-vol
+local     mission-vol
+
+$ docker run --name vol-writer -v mission-vol:/data alpine \
+    sh -c "echo 'Persistent Data Test 123' > /data/record.txt && cat /data/record.txt"
+Persistent Data Test 123
+
+$ docker rm vol-writer
+vol-writer
+
+$ docker run --rm --name vol-reader -v mission-vol:/data \
+    alpine cat /data/record.txt
+Persistent Data Test 123
+~~~
+
+<code>vol-writer</code>를 삭제한 뒤 새 <code>vol-reader</code>에서 같은 파일을 읽었으므로 데이터가 컨테이너 계층이 아니라 볼륨에 보존되었음을 확인했습니다.
+
+2026-11-04 22:41 KST에 같은 볼륨을 다시 연결해 파일 자체도 재확인했습니다.
+
+~~~console
+PS> docker volume ls --filter "name=mission-vol"
+DRIVER    VOLUME NAME
+local     mission-vol
+
+PS> docker run --rm --name vol-proof -v mission-vol:/data \
+      alpine sh -c "ls -l /data/record.txt && cat /data/record.txt"
+-rw-r--r--    1 root     root            25 Nov  4 12:54 /data/record.txt
+Persistent Data Test 123
+~~~
+
+## 9. 포트 충돌 진단과 해제
+
+<code>Bind for 0.0.0.0:8080 failed: port is already allocated</code>가 발생하면 다음 순서로 처리합니다.
+
+1. WSL2에서 리스닝 소켓과 PID를 확인합니다.
+
+~~~bash
+ss -ltnp | grep ':8080 '
+sudo lsof -nP -iTCP:8080 -sTCP:LISTEN
+~~~
+
+2. Docker 컨테이너가 포트를 게시했는지 먼저 확인합니다.
+
+~~~bash
+docker ps --filter "publish=8080" \
+  --format "table {{.ID}}\t{{.Names}}\t{{.Ports}}"
+~~~
+
+3. Docker 컨테이너가 점유했다면 확인한 컨테이너만 정상 종료합니다.
+
+~~~bash
+docker stop <확인한_컨테이너_이름>
+docker rm <확인한_컨테이너_이름>
+~~~
+
+4. 일반 프로세스라면 1단계의 PID와 명령행을 다시 확인한 후 정상 종료 신호를 보냅니다. 무관한 PID를 종료하지 않습니다.
+
+~~~bash
+ps -fp <확인한_PID>
+kill -TERM <확인한_PID>
+ss -ltnp | grep ':8080 ' || echo "8080 port is free"
+~~~
+
+5. 해당 서비스를 중지할 수 없으면 충돌하지 않는 호스트 포트를 선택합니다. 컨테이너 내부 포트 80은 그대로 둘 수 있습니다.
+
+~~~bash
+docker run -d --name web-server-alt -p 8082:80 custom-nginx:1.0
+curl -i http://localhost:8082
+~~~
+
+Windows 프로세스가 점유한 경우 PowerShell에서 <code>Get-NetTCPConnection -LocalPort 8080 -State Listen</code>과 <code>Get-Process -Id &lt;PID&gt;</code>로 소유자를 확인한 뒤 해당 애플리케이션을 정상 종료합니다.
+
+## 10. Git 설정·원격 상태·트러블슈팅
+
+### 사용자 설정 실제 로그
+
+~~~console
+$ git config --global user.name "buildergarlic"
+$ git config --global user.email "nobody@nobody.com"
+$ git config --global init.defaultBranch main
+$ git config --list
+user.name=buildergarlic
+user.email=nobody@nobody.com
+init.defaultbranch=main
+core.repositoryformatversion=0
+core.filemode=true
+core.bare=false
+core.logallrefupdates=true
+~~~
+
+### 원격 주소와 추적 상태 실제 로그
+
+~~~console
+[2026-11-04 22:41 KST, PowerShell]
+
+PS> git remote -v
+origin  https://github.com/buildergarlic/buildergarlic-codyssey.git (fetch)
+origin  https://github.com/buildergarlic/buildergarlic-codyssey.git (push)
+
+PS> git branch -vv
+* main 8d572c6 [origin/main] 실행 완료 커밋
+
+PS> git log -1 --date=iso --pretty=format:"%h %ad %s"
+8d572c6 2026-11-04 22:28:40 +0900 실행 완료 커밋
+~~~
+
+캡처 시점에 로컬 <code>main</code>이 <code>origin/main</code>을 추적하고 동일 커밋을 가리켰습니다.
+
+![VS Code와 GitHub 연동](./screenshots/vscode-github.png)
+
+### Case 1: 잘못된 git config 키
+
+실제 오류:
+
+~~~console
+PS> git config --global buildergarlic
+error: key does not contain a section: buildergarlic
+
+PS> git config --global nobody@nobody.com
+error: invalid key: nobody@nobody.com
+~~~
+
+Git 설정 키는 <code>section.key</code> 형식이어야 하는데 값만 키 위치에 넣은 것이 원인입니다.
+
+~~~powershell
+git config --global user.name "buildergarlic"
+git config --global user.email "nobody@nobody.com"
+git config --global --get user.name
+git config --global --get user.email
+~~~
+
+### Case 2: 원격 push 거부
+
+실제 오류:
+
+~~~console
+PS> git push -u origin main
+remote: fatal error in commit_refs
+To https://github.com/buildergarlic/buildergarlic-codyssey.git
+ ! [remote rejected] main -> main (failure)
+error: failed to push some refs to 'https://github.com/buildergarlic/buildergarlic-codyssey.git'
+~~~
+
+조치 순서:
+
+~~~powershell
+# 1. 대상 원격 주소 확인·교정
+git remote -v
+git remote set-url origin https://github.com/buildergarlic/buildergarlic-codyssey.git
+
+# 2. 로컬 객체 검증 및 일반 정리
+git fsck --full
+git gc
+
+# 3. 원격 상태를 받은 뒤 차이 확인
+git fetch origin
+git log --oneline --graph --decorate --all -n 15
+
+# 4. 일반 push 우선 시도
+git push -u origin main
+
+# 원격 이력을 의도적으로 대체해야 하고 차이를 검토한 경우에만
+git push -u origin main --force-with-lease
+~~~
+
+<code>--force-with-lease</code>는 확인하지 않은 새 원격 커밋이 있으면 덮어쓰기를 거부하므로 <code>--force</code>보다 안전하지만, 원격 이력을 바꿀 수 있어 마지막 수단으로만 사용합니다. 조치 후의 원격 주소와 추적 상태는 위 실제 로그에 기록했습니다.
+
+### Case 3: WSL2에서 Docker 데몬 연결 실패
+
+~~~text
+Cannot connect to the Docker daemon at unix:///var/run/docker.sock.
+Is the docker daemon running?
+~~~
+
+Docker Desktop의 Settings → Resources → WSL Integration에서 Ubuntu-22.04를 활성화하고 Apply & restart한 뒤 <code>docker version</code>과 <code>docker info</code>를 다시 실행합니다. 6절의 Server 출력과 Engine running 화면이 해결 후 증거입니다.
+
+### Case 4: /mnt/c에서 chmod가 반영되지 않음
+
+Windows NTFS를 WSL에 연결한 <code>/mnt/c</code>에서는 마운트 설정에 따라 Linux POSIX 권한 메타데이터가 보존되지 않을 수 있습니다. <code>df -T .</code>와 <code>mount | grep '/mnt/c'</code>로 파일 시스템을 확인하고, 권한 실습은 <code>/home/&lt;사용자&gt;</code> 아래로 옮겨 재수행합니다. 5절의 644 → 755, 755 → 700 출력이 해결 후 증거입니다.
+
+## 11. 화면 증거
+
+![VS Code에서 확인한 Dockerfile과 app 디렉터리](./screenshots/container-webserver.png)
+
+화면 캡처는 보조 증거이며, 재현 가능한 명령과 텍스트 출력은 본문에 함께 기록했습니다.
+
+---
+
+## 부록: 기존 상세 실습 로그
+
+아래에는 최초 작성 당시의 전체 명령 흐름을 당시 형태 그대로 보존했습니다. 부록은 이력 증거이며 현재 권장 절차는 위 1~10절입니다.
+
+> 안전 주의: 부록의 <code>git gc --prune=now</code>는 도달할 수 없는 객체를 즉시 정리해 복구 가능성을 낮출 수 있으므로 백업과 영향 검토 없이 재실행하지 않습니다. 또한 부록 마지막의 “단순 오타” 문장은 Git 사용자 설정 오류의 원인을 뜻할 뿐, 원격 <code>commit_refs</code> 오류의 원인까지 입증한 것은 아닙니다.
+
+<details>
+<summary>기존 원본 상세 실습 로그 보기</summary>
+
 ## 1. 실행환경
 | **OS** | Windows 11 (WSL2 - Ubuntu 22.04.x LTS, Kernel 5.15.x / 6.6.x) |
 | **Shell / Terminal** | GNU bash 5.1.16 (Windows Terminal + VSCode Remote-WSL Terminal) |
@@ -564,7 +1176,7 @@ WSL2 내부의 Git과 Windows의 Git 자격 증명 관리자(Git Credential Mana
 
 # 1. Git 사용자 정보 및 기본 브랜치 설정
 git config --global user.name "buildergarlic"
-git config --global user.email "buildergarlic@gmail.com"
+git config --global user.email "nobody@nobody.com"
 git config --global init.defaultBranch main
 
 # 2. Windows 11의 Git Credential Manager를 WSL2와 연동 (토큰/비밀번호 평문 노출 방지)
@@ -575,13 +1187,13 @@ git config --list
 
 buildergarlic@GNIA-C202-A01:~/workstation-mission$ git config --global user.name "buildergarlic"
 buildergarlic@GNIA-C202-A01:~/workstation-mission$ 
-buildergarlic@GNIA-C202-A01:~/workstation-mission$ git config --global user.email "buildergarlic@gmail.com"
+buildergarlic@GNIA-C202-A01:~/workstation-mission$ git config --global user.email "nobody@nobody.com"
 buildergarlic@GNIA-C202-A01:~/workstation-mission$ git config --global init.defaultBranch main
 buildergarlic@GNIA-C202-A01:~/workstation-mission$ git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"
 buildergarlic@GNIA-C202-A01:~/workstation-mission$ git config --list
 credential.helper=/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe
 user.name=buildergarlic
-user.email=buildergarlic@gmail.com
+user.email=nobody@nobody.com
 init.defaultbranch=main
 core.repositoryformatversion=0
 core.filemode=true
@@ -614,13 +1226,13 @@ code .
 #git user setting 
 PS D:\buildergarlic-codyssey> git config --global buildergarlic
 error: key does not contain a section: buildergarlic
-PS D:\buildergarlic-codyssey> git config --global buildergarlic@gmail.com
-error: invalid key: buildergarlic@gmail.com
+PS D:\buildergarlic-codyssey> git config --global nobody@nobody.com
+error: invalid key: nobody@nobody.com
 PS D:\buildergarlic-codyssey> 
 
 # 단순 오타
-PS D:\buildergarlic-codyssey> git config --global user.email "buildergarlic@gmail.com"
-PS D:\buildergarlic-codyssey> git config --global user.email "buildergarlic@gmail.com"
+PS D:\buildergarlic-codyssey> git config --global user.email "nobody@nobody.com"
+PS D:\buildergarlic-codyssey> git config --global user.email "nobody@nobody.com"
 PS D:\buildergarlic-codyssey> 
 
 ### Case 4: git push -u origin main
@@ -644,3 +1256,5 @@ Verification: Everything up-to-date 또는 Writing objects... Done 메시지와 
 *GitHub에 정상적으로 업로드되는지 확인합니다.대용량 파일 주의프로젝트 폴더 내에 100MB가 넘는 대용량 파일(동영상, 빌드 결과물 등)이 포함되어 있는지 확인해 보세요. GitHub는 개별 파일이 100MB를 초과하면 원격 거부(remote rejected) 오류를 발생시킵니다.
 
 실제 원인 - 단순 오타 Case 3 해결로 설정 완료.
+
+</details>
