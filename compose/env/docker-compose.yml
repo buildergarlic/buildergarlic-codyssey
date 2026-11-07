@@ -1,0 +1,38 @@
+# 보너스 4. 환경 변수로 포트/모드 바꾸기 (설정과 코드의 분리)
+#
+# 이미지와 HTML(코드)은 그대로 두고, 아래 3개 값만 바꿔 서버 동작을 바꿉니다.
+#   WEB_PORT   : 호스트 포트          (기본 8092)
+#   NGINX_PORT : 컨테이너 Nginx 포트  (기본 80)
+#   APP_MODE   : 실행 모드 표시값      (기본 development)
+#
+# 값의 우선순위: 셸 환경 변수 > 이 폴더의 .env 파일 > 아래 ${변수:-기본값}
+#
+# 실행 위치: 이 파일이 있는 compose/env/
+#   docker compose up -d --build                 # 기본값으로 실행
+#   cp .env.example .env && docker compose up -d # .env 값으로 다시 실행
+
+name: mission-env
+
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: custom-nginx:1.0
+    environment:
+      NGINX_PORT: ${NGINX_PORT:-80}
+      APP_MODE: ${APP_MODE:-development}
+    ports:
+      - "${WEB_PORT:-8092}:${NGINX_PORT:-80}"
+    volumes:
+      # nginx 공식 이미지는 시작할 때 /etc/nginx/templates/*.template 안의 ${변수}를
+      # 환경 변수 값으로 바꿔 /etc/nginx/conf.d/ 에 설정 파일을 만듭니다.
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    # Dockerfile의 HEALTHCHECK는 80 포트 고정이므로, 바뀐 포트를 검사하도록 덮어씁니다.
+    # $$NGINX_PORT 는 Compose가 아니라 컨테이너 셸이 해석합니다.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${NGINX_PORT}/ > /dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s

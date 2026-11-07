@@ -1,0 +1,52 @@
+# 보너스 2·3. Docker Compose 멀티 컨테이너 + 운영 명령어
+#
+# web     : 7절의 커스텀 Nginx 이미지 (호스트 8091 → 컨테이너 80)
+# checker : 보조 서비스. 같은 네트워크에서 서비스 이름 "web"으로 5초마다 접속해 결과를 로그로 남김
+#
+# 실행 위치: 이 파일이 있는 compose/multi/
+#   docker compose up -d --build
+
+name: mission-multi
+
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: custom-nginx:1.0
+    ports:
+      - "8091:80"
+    networks:
+      - mission-net
+    # Dockerfile의 HEALTHCHECK(30초 간격)를 Compose에서 덮어써 빠르게 healthy 판정을 받습니다.
+    # localhost가 IPv6(::1)로 해석되는 환경 차이를 피하려고 127.0.0.1을 명시합니다.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ > /dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  checker:
+    image: alpine:3.22
+    depends_on:
+      web:
+        condition: service_healthy   # web이 healthy가 된 뒤에 시작
+    networks:
+      - mission-net
+    # $$ 는 Compose 변수 치환을 막고 컨테이너 셸에 $ 를 그대로 넘기는 표기입니다.
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          if wget -qO- http://web/ | grep -q "Custom Nginx"; then
+            echo "$$(date '+%F %T') checker -> http://web/ : OK"
+          else
+            echo "$$(date '+%F %T') checker -> http://web/ : FAIL"
+          fi
+          sleep 5
+        done
+
+networks:
+  mission-net: {}   # 실제 이름: mission-multi_mission-net

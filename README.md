@@ -2,8 +2,9 @@
 
 Windows 11에서 WSL2와 Docker Desktop을 구성하고, Linux 파일 조작·권한 변경부터 Docker 이미지 빌드, 포트 매핑, 마운트, 볼륨 영속성, Git 연동까지 검증한 기록입니다.
 
-> 검증 일자: 2026-11-04 (KST)
+> 검증 일자: 2026-11-04 (KST) · 보너스 과제·재현성 검증: 2026-11-07 (KST)
 > 아래 “실제 실행 로그”에는 터미널에서 확인한 출력만 기록했습니다. 설치·장애 대응 명령은 “재현 절차”로 구분했습니다.
+> **평가자는 [13절 재현 가이드](#13-재현-가이드-평가자용)의 명령을 위에서부터 그대로 실행하면 7·8·12절 결과를 직접 확인할 수 있습니다.**
 
 ## 1. 평가 항목별 증거
 
@@ -27,6 +28,9 @@ Windows 11에서 WSL2와 Docker Desktop을 구성하고, Linux 파일 조작·�
 | 16 | 9절: <code>ss</code>/<code>lsof</code>/Docker 조회 및 안전한 포트 해제 |
 | 17 | 8절: 바인드 마운트와 Docker 볼륨 장단점·사용 사례 비교 |
 | 18 | 10절: 실제 Git 오류, 조치 순서, 조치 후 원격 추적 상태 |
+| 보너스 1~4 | 12절: Compose 단일·멀티 컨테이너, 운영 명령어 루틴, 환경 변수 주입 실제 로그 |
+| 보너스 5 | 12-5절: GitHub SSH 키 설정 절차와 통과 기준 |
+| 재현성 | 13절: 처음부터 따라 하는 절차, 통과 기준, 작성자 PC 종속 항목의 대체 방법, 클린 clone 재현 로그 |
 
 ## 2. 실행 환경
 
@@ -56,10 +60,21 @@ Docker Desktop에서 Settings → General → Use the WSL 2 based engine과 Sett
 ~~~text
 buildergarlic-codyssey/
 ├── .dockerignore
+├── .gitignore
 ├── Dockerfile
 ├── README.md
 ├── app/
 │   └── index.html
+├── compose/                      # 12절 보너스 과제
+│   ├── single/
+│   │   └── docker-compose.yml    # 단일 서비스
+│   ├── multi/
+│   │   └── docker-compose.yml    # web + checker 멀티 컨테이너
+│   └── env/
+│       ├── .env.example          # 환경 변수 예시 (복사해서 .env로 사용)
+│       ├── docker-compose.yml    # 환경 변수로 포트/모드 변경
+│       └── nginx/
+│           └── default.conf.template
 └── screenshots/
     ├── container-webserver.png
     ├── docker.desktop-WSL2-Setting.png
@@ -70,9 +85,13 @@ buildergarlic-codyssey/
 | 경로 | 역할 |
 |---|---|
 | [Dockerfile](./Dockerfile) | Nginx 기반 커스텀 이미지 빌드 명세 |
-| [.dockerignore](./.dockerignore) | Git 문서·스크린샷 등 불필요한 빌드 컨텍스트 제외 |
+| [.dockerignore](./.dockerignore) | Git 문서·스크린샷·Compose 설정·<code>.env</code> 등 불필요한 빌드 컨텍스트 제외 |
+| [.gitignore](./.gitignore) | PC마다 다른 실제 <code>.env</code> 파일을 커밋에서 제외 |
 | [app/](./app) | 컨테이너가 서비스할 애플리케이션 소스 |
 | [app/index.html](./app/index.html) | Nginx 정적 시작 페이지 |
+| [compose/single/](./compose/single/docker-compose.yml) | 보너스 1: 7절 <code>docker run</code>을 Compose 파일로 옮긴 단일 서비스 |
+| [compose/multi/](./compose/multi/docker-compose.yml) | 보너스 2·3: 웹 서버 + 보조 서비스(checker) 멀티 컨테이너 |
+| [compose/env/](./compose/env/docker-compose.yml) | 보너스 4: 환경 변수로 포트·모드 변경, Nginx 설정 템플릿과 <code>.env.example</code> |
 | [screenshots/](./screenshots) | 브라우저, Docker Desktop, VS Code 검증 화면 |
 | [README.md](./README.md) | 재현 절차, 실제 출력, 개념과 트러블슈팅 기록 |
 
@@ -315,7 +334,7 @@ Docker의 매핑 표기는 <code>호스트:컨테이너</code> 순서입니다.
 | 영속 데이터 | <code>mission-vol:/data</code> | Docker 관리 볼륨 | 컨테이너 /data |
 
 ~~~bash
-cd ~/workstation-mission
+cd ~/buildergarlic-codyssey   # git clone한 저장소 루트 (작성자 실습 당시 경로는 ~/workstation-mission, 13-3절 참고)
 docker build -t custom-nginx:1.0 .
 docker run -d --name web-server -p 8080:80 custom-nginx:1.0
 curl -i http://localhost:8080
@@ -599,11 +618,1031 @@ Windows NTFS를 WSL에 연결한 <code>/mnt/c</code>에서는 마운트 설정�
 
 화면 캡처는 보조 증거이며, 재현 가능한 명령과 텍스트 출력은 본문에 함께 기록했습니다.
 
+## 12. 보너스 과제 (선택)
+
+> **실행 환경 안내**: 1~11절 로그는 작성자 Windows 11 PC(WSL2 + Docker Desktop)에서, 이 절의 로그는 2026-11-07 클라우드 Linux 검증 환경(Ubuntu 24.04.5 LTS, Docker Engine 29.9.2, Docker Compose v5.7.0)에서 실제로 실행한 출력입니다. 두 환경 모두 같은 <code>nginx/1.31.8</code>이 응답했습니다. Compose 파일은 상대경로만 쓰므로 WSL2 + Docker Desktop에서도 같은 명령으로 실행됩니다.
+> 실행마다 바뀌는 값(컨테이너 ID, 내부 IP, 시각, 이미지 digest)은 비교 대상이 아닙니다. 컨테이너 안의 시각은 UTC입니다.
+
+| 과제 | 사용 파일 | 호스트 포트 | 핵심 확인 |
+|---|---|---|---|
+| 12-1 Compose 기초 | [compose/single/docker-compose.yml](./compose/single/docker-compose.yml) | 8090 | 명령 한 줄로 빌드·실행, HTTP 200, healthy |
+| 12-2 멀티 컨테이너 | [compose/multi/docker-compose.yml](./compose/multi/docker-compose.yml) | 8091 | checker가 서비스 이름 <code>web</code>으로 통신 |
+| 12-3 운영 명령어 | 12-2와 같은 파일 | 8091 | up·ps·logs·down과 장애 감지 루틴 |
+| 12-4 환경 변수 | [compose/env/](./compose/env/docker-compose.yml) | 8092 → 9090 | 코드 수정 없이 포트·모드 변경 |
+| 12-5 SSH 키 | GitHub 계정 설정 | - | <code>ssh -T</code> 인증, SSH 원격으로 push |
+
+호스트 포트는 7~9절에서 쓰는 8080·8081·8082와 겹치지 않게 골랐습니다.
+
+### 12-1. Docker Compose 기초: 단일 서비스
+
+<code>docker-compose.yml</code>의 기본 구조:
+
+| 최상위 키 | 의미 |
+|---|---|
+| <code>name</code> | 프로젝트 이름. 컨테이너·네트워크 이름 앞에 붙습니다(예: <code>mission-single-web-1</code>). 고정해 두면 저장소를 어떤 폴더 이름으로 clone해도 이름이 같습니다. |
+| <code>services</code> | 실행할 컨테이너 목록. 키 이름(<code>web</code>)이 서비스 이름입니다. |
+| <code>networks</code>, <code>volumes</code> | 선택 항목. 사용자 정의 네트워크·볼륨을 선언합니다. |
+
+예전 문서의 <code>version:</code> 키는 Compose v2부터 쓰지 않으므로 넣지 않았습니다.
+
+7절의 <code>docker</code> 명령과 Compose 키의 대응:
+
+| 7절 명령 | Compose |
+|---|---|
+| <code>docker build -t custom-nginx:1.0 .</code> | <code>build.context: ../..</code> + <code>image: custom-nginx:1.0</code> |
+| <code>--name web-server</code> | 서비스 이름 <code>web</code> → 컨테이너 <code>mission-single-web-1</code> |
+| <code>-p 8080:80</code> | <code>ports: ["8090:80"]</code> |
+| <code>-d</code> | <code>docker compose up -d</code> |
+| <code>docker stop</code> + <code>docker rm</code> | <code>docker compose down</code> (기본 네트워크까지 삭제) |
+
+[compose/single/docker-compose.yml](./compose/single/docker-compose.yml)의 내용:
+
+~~~yaml
+# 보너스 1. Docker Compose 기초 - 단일 서비스
+#
+# 7절의 아래 명령을 "문서화된 실행 설정"으로 옮긴 파일입니다.
+#   docker build -t custom-nginx:1.0 .
+#   docker run -d --name web-server -p 8080:80 custom-nginx:1.0
+#
+# 실행 위치: 이 파일이 있는 compose/single/
+#   docker compose up -d --build
+
+# 프로젝트 이름을 고정해 폴더 이름과 관계없이 컨테이너·네트워크 이름이 같게 만듭니다.
+name: mission-single
+
+services:
+  web:                      # 서비스 이름 (docker run --name 역할)
+    build:
+      context: ../..        # 저장소 루트 (docker build . 의 '.')
+      dockerfile: Dockerfile
+    image: custom-nginx:1.0 # 빌드 결과 태그 (docker build -t)
+    ports:
+      - "8090:80"           # 호스트:컨테이너 (docker run -p). 7절 8080과 겹치지 않게 8090 사용
+~~~
+
+재현 명령:
+
+~~~bash
+cd ~/buildergarlic-codyssey/compose/single
+docker compose config
+docker compose up -d --build
+docker compose ps
+curl -sS -i http://localhost:8090
+sleep 35
+docker compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}'
+docker compose down
+docker compose ps -a
+~~~
+
+실제 실행 로그:
+
+~~~console
+[2026-11-07 18:21 KST, 클라우드 Linux 검증 환경]
+
+$ cd ~/buildergarlic-codyssey/compose/single
+
+$ docker compose config
+name: mission-single
+services:
+  web:
+    image: custom-nginx:1.0
+    networks:
+      default: null
+    build:
+      context: /root/buildergarlic-codyssey
+      dockerfile: Dockerfile
+    ports:
+      - mode: ingress
+        target: 80
+        published: "8090"
+        protocol: tcp
+networks:
+  default:
+    name: mission-single_default
+
+$ docker compose up -d --build
+ Image custom-nginx:1.0 Building
+   … BuildKit 빌드 단계 출력 생략 (13-5절 docker build 로그와 같은 단계) …
+ Image custom-nginx:1.0 Built
+ Network mission-single_default Creating
+ Network mission-single_default Creating
+ Network mission-single_default Created
+ Network mission-single_default Created
+ Container mission-single-web-1 Creating
+ Container mission-single-web-1 Created
+ Container mission-single-web-1 Starting
+ Container mission-single-web-1 Started
+
+$ docker compose ps
+NAME                   IMAGE              COMMAND                  SERVICE   CREATED                  STATUS                                     PORTS
+mission-single-web-1   custom-nginx:1.0   "/docker-entrypoint.…"   web       Less than a second ago   Up Less than a second (health: starting)   0.0.0.0:8090->80/tcp
+
+$ curl -sS -i http://localhost:8090
+HTTP/1.1 200 OK
+Server: nginx/1.31.8
+Date: Sat, 07 Nov 2026 09:21:37 GMT
+Content-Type: text/html
+Content-Length: 280
+Last-Modified: Sat, 07 Nov 2026 09:21:27 GMT
+Connection: keep-alive
+ETag: "6aeeed97-118"
+Accept-Ranges: bytes
+
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workstation Mission</title>
+</head>
+<body>
+  <h1>Custom Nginx Container on Windows 11 (WSL2)</h1>
+  <p>Version 1.0</p>
+</body>
+</html>
+
+$ sleep 35
+
+$ docker compose ps --format 'table {{.Name}}\t{{.Status}}\t{{.Ports}}'
+NAME                   STATUS                    PORTS
+mission-single-web-1   Up 35 seconds (healthy)   0.0.0.0:8090->80/tcp
+
+$ docker compose down
+ Container mission-single-web-1 Stopping
+ Container mission-single-web-1 Stopped
+ Container mission-single-web-1 Removing
+ Container mission-single-web-1 Removed
+ Network mission-single_default Removing
+ Network mission-single_default Removed
+
+$ docker compose ps -a
+NAME      IMAGE     COMMAND   SERVICE   CREATED   STATUS    PORTS
+~~~
+
+<code>docker compose config</code>에서 <code>context: ../..</code>가 실행한 PC의 절대경로로 바뀌었고, 같은 이미지가 HTTP 200과 <code>(healthy)</code>로 응답한 뒤 <code>down</code>으로 컨테이너와 네트워크가 모두 정리되었습니다.
+
+**배움 포인트: 실행 명령이 “문서화된 실행 설정”으로 바뀌는 이유**
+
+- <code>docker run</code>의 옵션은 실행한 사람의 셸 기록에만 남습니다. 다음 사람은 포트·이름·빌드 경로를 다시 기억해서 입력해야 하고, 옵션 하나만 빠져도 결과가 달라집니다.
+- Compose 파일은 그 옵션을 저장소에 커밋되는 텍스트로 만듭니다. 리뷰하고, 변경 이력을 남기고, 누구나 <code>docker compose up</code> 한 줄로 같은 설정을 실행할 수 있습니다.
+- <code>docker compose config</code>로 변수와 상대경로가 해석된 최종 설정을 실행 전에 확인할 수 있습니다.
+
+### 12-2. Docker Compose 멀티 컨테이너
+
+~~~text
+[호스트] --(8091:80)--> [web: custom-nginx:1.0, 컨테이너 포트 80]
+                                  ▲
+                                  │  wget http://web/  (5초마다, 서비스 이름으로 접속)
+                                  │
+                         [checker: alpine:3.22]
+
+※ web과 checker는 모두 mission-multi_mission-net 네트워크에 연결됨
+~~~
+
+- <code>web</code>: 7절과 같은 커스텀 Nginx 이미지
+- <code>checker</code>: 보조 서비스. 같은 네트워크에서 서비스 이름 <code>web</code>으로 5초마다 접속해 OK/FAIL을 로그로 남깁니다.
+- <code>depends_on.condition: service_healthy</code>로 web이 healthy가 된 다음에 checker가 시작됩니다.
+
+[compose/multi/docker-compose.yml](./compose/multi/docker-compose.yml)의 내용:
+
+~~~yaml
+# 보너스 2·3. Docker Compose 멀티 컨테이너 + 운영 명령어
+#
+# web     : 7절의 커스텀 Nginx 이미지 (호스트 8091 → 컨테이너 80)
+# checker : 보조 서비스. 같은 네트워크에서 서비스 이름 "web"으로 5초마다 접속해 결과를 로그로 남김
+#
+# 실행 위치: 이 파일이 있는 compose/multi/
+#   docker compose up -d --build
+
+name: mission-multi
+
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: custom-nginx:1.0
+    ports:
+      - "8091:80"
+    networks:
+      - mission-net
+    # Dockerfile의 HEALTHCHECK(30초 간격)를 Compose에서 덮어써 빠르게 healthy 판정을 받습니다.
+    # localhost가 IPv6(::1)로 해석되는 환경 차이를 피하려고 127.0.0.1을 명시합니다.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1/ > /dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+
+  checker:
+    image: alpine:3.22
+    depends_on:
+      web:
+        condition: service_healthy   # web이 healthy가 된 뒤에 시작
+    networks:
+      - mission-net
+    # $$ 는 Compose 변수 치환을 막고 컨테이너 셸에 $ 를 그대로 넘기는 표기입니다.
+    command:
+      - sh
+      - -c
+      - |
+        while true; do
+          if wget -qO- http://web/ | grep -q "Custom Nginx"; then
+            echo "$$(date '+%F %T') checker -> http://web/ : OK"
+          else
+            echo "$$(date '+%F %T') checker -> http://web/ : FAIL"
+          fi
+          sleep 5
+        done
+
+networks:
+  mission-net: {}   # 실제 이름: mission-multi_mission-net
+~~~
+
+재현 명령:
+
+~~~bash
+cd ~/buildergarlic-codyssey/compose/multi
+docker compose up -d --build
+sleep 10
+docker compose ps --format 'table {{.Name}}\t{{.Service}}\t{{.Status}}\t{{.Ports}}'
+docker compose logs --tail 3 checker
+docker network inspect mission-multi_mission-net --format '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{println}}{{end}}'
+docker compose exec checker nslookup web
+docker compose exec checker wget -qO- http://web/
+curl -sS -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:8091
+curl -sS http://web/
+~~~
+
+실제 실행 로그:
+
+~~~console
+[2026-11-07 18:22 KST, 클라우드 Linux 검증 환경]
+
+$ cd ~/buildergarlic-codyssey/compose/multi
+
+$ docker compose up -d --build
+ Image alpine:3.22 Pulling
+ 710f3da1112f Pulling fs layer 0B
+ 41efde5237a6 Download complete 0B
+ f270d3a86df5 Download complete 0B
+ 710f3da1112f Downloading 2.097MB
+ 710f3da1112f Download complete 0B
+ 710f3da1112f Pull complete 0B
+ Image alpine:3.22 Pulled
+ Image custom-nginx:1.0 Building
+   … BuildKit 빌드 단계 출력 생략 (13-5절 docker build 로그와 같은 단계) …
+ Image custom-nginx:1.0 Built
+ Network mission-multi_mission-net Creating
+ Network mission-multi_mission-net Creating
+ Network mission-multi_mission-net Created
+ Network mission-multi_mission-net Created
+ Container mission-multi-web-1 Creating
+ Container mission-multi-web-1 Created
+ Container mission-multi-checker-1 Creating
+ Container mission-multi-checker-1 Created
+ Container mission-multi-web-1 Starting
+ Container mission-multi-web-1 Started
+ Container mission-multi-web-1 Waiting
+ Container mission-multi-web-1 Healthy
+ Container mission-multi-checker-1 Starting
+ Container mission-multi-checker-1 Started
+
+$ sleep 10
+
+$ docker compose ps --format 'table {{.Name}}\t{{.Service}}\t{{.Status}}\t{{.Ports}}'
+NAME                      SERVICE   STATUS                    PORTS
+mission-multi-checker-1   checker   Up 10 seconds
+mission-multi-web-1       web       Up 15 seconds (healthy)   0.0.0.0:8091->80/tcp
+
+$ docker compose logs --tail 3 checker
+checker-1  | 2026-11-07 09:22:20 checker -> http://web/ : OK
+checker-1  | 2026-11-07 09:22:25 checker -> http://web/ : OK
+checker-1  | 2026-11-07 09:22:30 checker -> http://web/ : OK
+
+$ docker network inspect mission-multi_mission-net --format '{{range .Containers}}{{.Name}} {{.IPv4Address}}{{println}}{{end}}'
+mission-multi-web-1 172.18.0.2/16
+mission-multi-checker-1 172.18.0.3/16
+
+$ docker compose exec checker nslookup web
+Server:		127.0.0.11
+Address:	127.0.0.11:53
+
+Non-authoritative answer:
+Name:	web
+Address: 172.18.0.2
+
+Non-authoritative answer:
+
+$ docker compose exec checker wget -qO- http://web/
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Workstation Mission</title>
+</head>
+<body>
+  <h1>Custom Nginx Container on Windows 11 (WSL2)</h1>
+  <p>Version 1.0</p>
+</body>
+</html>
+
+$ curl -sS -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:8091
+HTTP 200
+
+$ curl -sS http://web/
+curl: (6) Could not resolve host: web
+~~~
+
+확인 결과:
+
+- <code>up</code> 로그의 <code>web-1 Waiting → Healthy → checker-1 Starting</code> 순서로 시작 순서가 지켜졌습니다.
+- checker 안에서 <code>nslookup web</code>을 실행하자 Docker 내장 DNS(<code>127.0.0.11</code>)가 web의 IP(<code>docker network inspect</code> 결과와 같은 <code>172.18.0.2</code>)를 돌려주었고, <code>wget http://web/</code>으로 HTML을 받았습니다. 두 번째 빈 <code>Non-authoritative answer</code>는 IPv6(AAAA) 주소가 없다는 뜻입니다.
+- 호스트에서는 포트 매핑(8091)으로만 접속되고, 서비스 이름 <code>web</code>은 해석되지 않았습니다(<code>Could not resolve host: web</code>).
+
+**배움 포인트: 네트워크와 서비스 디스커버리**
+
+- Compose는 프로젝트마다 전용 네트워크(<code>mission-multi_mission-net</code>)를 만들고, 그 안의 컨테이너는 서비스 이름으로 서로를 찾습니다. 컨테이너 IP는 다시 만들 때마다 바뀔 수 있지만 이름은 그대로라서 설정에 IP를 적을 필요가 없습니다.
+- 컨테이너끼리는 컨테이너 포트(<code>web:80</code>)로 통신합니다. 호스트 포트 8091은 네트워크 바깥(호스트)에서 들어오기 위한 입구입니다.
+- 서비스 이름은 그 네트워크 안에서만 통합니다. 6절의 네트워크 네임스페이스 설명과 같은 원리입니다.
+
+### 12-3. Compose 운영 명령어
+
+| 명령 | 용도 | 볼 것 |
+|---|---|---|
+| <code>docker compose up -d [--build]</code> | 생성·시작. 설정이 바뀐 서비스는 다시 만듭니다. | <code>Started</code>, <code>Recreated</code> |
+| <code>docker compose ps [-a]</code> | 상태 조회 (<code>-a</code>: 종료된 컨테이너 포함) | <code>STATE</code>, <code>(healthy)</code>, <code>PORTS</code> |
+| <code>docker compose logs [--tail N] [-f] [서비스]</code> | 로그 조회 | 에러, FAIL, 요청 기록 |
+| <code>docker compose stop</code> / <code>start [서비스]</code> | 컨테이너를 지우지 않고 중지·재시작 | <code>exited</code> ↔ <code>running</code> |
+| <code>docker compose down</code> | 중지 + 컨테이너·네트워크 삭제 | <code>ps -a</code>가 빈 목록 |
+
+**상태 확인 루틴**
+
+1. <code>ps</code>: 모든 서비스가 <code>running</code>이고, healthcheck가 있는 서비스는 <code>(healthy)</code>인가?
+2. <code>logs --tail</code>: 최근 로그에 에러나 FAIL이 없는가?
+3. 이상이 있으면 해당 서비스만 조치(<code>stop</code>/<code>start</code>/<code>up -d</code>)한 뒤 1~2번을 다시 확인한다.
+4. 작업이 끝나면 <code>down</code>으로 정리한다.
+5. <code>ps -a</code>와 <code>docker network ls</code>로 남은 리소스가 없는지 확인한다.
+
+12-2의 컨테이너가 실행 중인 상태에서 이어서 실행합니다.
+
+~~~bash
+cd ~/buildergarlic-codyssey/compose/multi
+# 1) 상태와 최근 로그 확인
+docker compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+docker compose logs --tail 3 web
+# 2) 장애 상황 재현: web만 중지
+docker compose stop web
+sleep 11
+docker compose ps -a --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+docker compose logs --tail 2 checker
+# 3) 복구 후 재확인
+docker compose start web
+sleep 11
+docker compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+docker compose logs --tail 2 checker
+# 4) 종료와 잔여 리소스 확인
+docker compose down
+docker compose ps -a
+docker network ls --filter name=mission-multi
+~~~
+
+실제 실행 로그:
+
+~~~console
+[2026-11-07 18:22 KST, 클라우드 Linux 검증 환경]
+
+$ cd ~/buildergarlic-codyssey/compose/multi
+
+# 1) 상태와 최근 로그 확인
+$ docker compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+SERVICE   STATE     STATUS
+checker   running   Up 10 seconds
+web       running   Up 15 seconds (healthy)
+
+$ docker compose logs --tail 3 web
+web-1  | 172.18.0.3 - - [07/Nov/2026:09:22:30 +0000] "GET / HTTP/1.1" 200 280 "-" "Wget" "-"
+web-1  | 172.18.0.3 - - [07/Nov/2026:09:22:30 +0000] "GET / HTTP/1.1" 200 280 "-" "Wget" "-"
+web-1  | 172.18.0.1 - - [07/Nov/2026:09:22:30 +0000] "GET / HTTP/1.1" 200 280 "-" "curl/8.5.0" "-"
+
+# 2) 장애 상황 재현: web만 중지
+$ docker compose stop web
+ Container mission-multi-web-1 Stopping
+ Container mission-multi-web-1 Stopped
+
+$ sleep 11
+
+$ docker compose ps -a --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+SERVICE   STATE     STATUS
+checker   running   Up 21 seconds
+web       exited    Exited (0) 11 seconds ago
+
+$ docker compose logs --tail 2 checker
+checker-1  | wget: bad address 'web'
+checker-1  | 2026-11-07 09:22:40 checker -> http://web/ : FAIL
+
+# 3) 복구 후 재확인
+$ docker compose start web
+ Container mission-multi-web-1 Starting
+ Container mission-multi-web-1 Started
+
+$ sleep 11
+
+$ docker compose ps --format 'table {{.Service}}\t{{.State}}\t{{.Status}}'
+SERVICE   STATE     STATUS
+checker   running   Up 33 seconds
+web       running   Up 11 seconds (healthy)
+
+$ docker compose logs --tail 2 checker
+checker-1  | 2026-11-07 09:22:45 checker -> http://web/ : OK
+checker-1  | 2026-11-07 09:22:50 checker -> http://web/ : OK
+
+# 4) 종료와 잔여 리소스 확인
+$ docker compose down
+ Container mission-multi-checker-1 Stopping
+ Container mission-multi-checker-1 Stopped
+ Container mission-multi-checker-1 Removing
+ Container mission-multi-checker-1 Removed
+ Container mission-multi-web-1 Stopping
+ Container mission-multi-web-1 Stopped
+ Container mission-multi-web-1 Removing
+ Container mission-multi-web-1 Removed
+ Network mission-multi_mission-net Removing
+ Network mission-multi_mission-net Removed
+
+$ docker compose ps -a
+NAME      IMAGE     COMMAND   SERVICE   CREATED   STATUS    PORTS
+
+$ docker network ls --filter name=mission-multi
+NETWORK ID   NAME      DRIVER    SCOPE
+~~~
+
+web을 멈추자 <code>ps -a</code>에 <code>exited</code>가 보이고 checker 로그에 <code>bad address 'web'</code>과 FAIL이 남았습니다. web을 다시 시작하자 <code>(healthy)</code>와 OK로 돌아왔고, <code>down</code> 후에는 컨테이너와 네트워크가 모두 사라졌습니다.
+
+**배움 포인트: 운영 관점의 “상태 확인 루틴”**
+
+- <code>ps</code>는 “살아 있는가”, <code>logs</code>는 “제대로 일하는가”를 알려줍니다. 컨테이너가 <code>running</code>이어도 로그에는 FAIL이 쌓일 수 있으므로 둘을 함께 봅니다.
+- 문제가 생긴 서비스만 골라 조치하고, 같은 루틴으로 복구를 확인합니다.
+- 마지막에 <code>down</code>과 잔여 리소스 확인까지 해야 다음 실습에서 포트 충돌(9절)이 생기지 않습니다.
+
+### 12-4. 환경 변수 활용
+
+이미지와 HTML은 그대로 두고, 아래 세 값만 바꿔 서버 동작을 바꿉니다.
+
+| 변수 | 기본값 | <code>.env.example</code> 값 | 쓰이는 곳 |
+|---|---|---|---|
+| <code>WEB_PORT</code> | 8092 | 9090 | <code>ports</code>의 호스트 쪽 |
+| <code>NGINX_PORT</code> | 80 | 8088 | <code>ports</code>의 컨테이너 쪽, Nginx <code>listen</code>, healthcheck |
+| <code>APP_MODE</code> | development | production | 응답 헤더 <code>X-App-Mode</code>, <code>/mode</code> 응답 |
+
+값의 우선순위: **셸 환경 변수 > <code>compose/env/.env</code> 파일 > Compose 파일의 <code>${변수:-기본값}</code>**
+
+[compose/env/docker-compose.yml](./compose/env/docker-compose.yml):
+
+~~~yaml
+# 보너스 4. 환경 변수로 포트/모드 바꾸기 (설정과 코드의 분리)
+#
+# 이미지와 HTML(코드)은 그대로 두고, 아래 3개 값만 바꿔 서버 동작을 바꿉니다.
+#   WEB_PORT   : 호스트 포트          (기본 8092)
+#   NGINX_PORT : 컨테이너 Nginx 포트  (기본 80)
+#   APP_MODE   : 실행 모드 표시값      (기본 development)
+#
+# 값의 우선순위: 셸 환경 변수 > 이 폴더의 .env 파일 > 아래 ${변수:-기본값}
+#
+# 실행 위치: 이 파일이 있는 compose/env/
+#   docker compose up -d --build                 # 기본값으로 실행
+#   cp .env.example .env && docker compose up -d # .env 값으로 다시 실행
+
+name: mission-env
+
+services:
+  web:
+    build:
+      context: ../..
+      dockerfile: Dockerfile
+    image: custom-nginx:1.0
+    environment:
+      NGINX_PORT: ${NGINX_PORT:-80}
+      APP_MODE: ${APP_MODE:-development}
+    ports:
+      - "${WEB_PORT:-8092}:${NGINX_PORT:-80}"
+    volumes:
+      # nginx 공식 이미지는 시작할 때 /etc/nginx/templates/*.template 안의 ${변수}를
+      # 환경 변수 값으로 바꿔 /etc/nginx/conf.d/ 에 설정 파일을 만듭니다.
+      - ./nginx/default.conf.template:/etc/nginx/templates/default.conf.template:ro
+    # Dockerfile의 HEALTHCHECK는 80 포트 고정이므로, 바뀐 포트를 검사하도록 덮어씁니다.
+    # $$NGINX_PORT 는 Compose가 아니라 컨테이너 셸이 해석합니다.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:$${NGINX_PORT}/ > /dev/null || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+~~~
+
+[compose/env/.env.example](./compose/env/.env.example):
+
+~~~ini
+# 사용법: cp .env.example .env  (.env 는 .gitignore로 커밋에서 제외)
+# 값을 바꾼 뒤 docker compose up -d 를 다시 실행하면 컨테이너가 새 설정으로 재생성됩니다.
+WEB_PORT=9090
+NGINX_PORT=8088
+APP_MODE=production
+~~~
+
+[compose/env/nginx/default.conf.template](./compose/env/nginx/default.conf.template): nginx 공식 이미지는 시작할 때 <code>/etc/nginx/templates/*.template</code>의 <code>${변수}</code>를 환경 변수 값으로 바꿔 <code>/etc/nginx/conf.d/</code>에 설정 파일을 만듭니다.
+
+~~~nginx
+# 보너스 4용 Nginx 설정 템플릿
+# ${NGINX_PORT}, ${APP_MODE}는 컨테이너 시작 시 환경 변수 값으로 치환됩니다.
+server {
+    listen       ${NGINX_PORT};
+    server_name  localhost;
+
+    # 모든 응답에 현재 모드를 헤더로 표시
+    add_header X-App-Mode "${APP_MODE}" always;
+
+    location / {
+        root   /usr/share/nginx/html;
+        index  index.html;
+    }
+
+    # 현재 적용된 설정값을 확인하는 엔드포인트
+    location = /mode {
+        default_type text/plain;
+        return 200 "mode=${APP_MODE} listen=${NGINX_PORT}\n";
+    }
+}
+~~~
+
+재현 명령:
+
+~~~bash
+cd ~/buildergarlic-codyssey/compose/env
+# (1) 기본값으로 실행 (.env 없음)
+ls -A
+docker compose up -d --build
+sleep 10
+docker compose ps --format 'table {{.Service}}\t{{.Status}}\t{{.Ports}}'
+curl -sS -i http://localhost:8092/mode
+docker compose logs web | grep envsubst
+# (2) 코드는 그대로 두고 .env 값만 바꿔 재실행
+cp .env.example .env
+grep -v '^#' .env
+docker compose up -d
+sleep 10
+docker compose ps --format 'table {{.Service}}\t{{.Status}}\t{{.Ports}}'
+curl -sS -i http://localhost:9090/mode
+curl -sS -D - -o /dev/null http://localhost:9090/ | grep -E 'HTTP/|X-App-Mode'
+docker compose exec web sh -c 'printenv NGINX_PORT APP_MODE; grep -E "listen|X-App-Mode" /etc/nginx/conf.d/default.conf'
+curl -sS http://localhost:8092/mode
+# (3) 우선순위 확인: 셸 환경 변수 > .env
+APP_MODE=staging docker compose config | grep APP_MODE
+docker compose down
+rm .env
+~~~
+
+실제 실행 로그:
+
+~~~console
+[2026-11-07 18:23 KST, 클라우드 Linux 검증 환경]
+
+$ cd ~/buildergarlic-codyssey/compose/env
+
+# (1) 기본값으로 실행 (.env 없음)
+$ ls -A
+.env.example
+docker-compose.yml
+nginx
+
+$ docker compose up -d --build
+ Image custom-nginx:1.0 Building
+   … BuildKit 빌드 단계 출력 생략 (13-5절 docker build 로그와 같은 단계) …
+ Image custom-nginx:1.0 Built
+ Network mission-env_default Creating
+ Network mission-env_default Creating
+ Network mission-env_default Created
+ Network mission-env_default Created
+ Container mission-env-web-1 Creating
+ Container mission-env-web-1 Created
+ Container mission-env-web-1 Starting
+ Container mission-env-web-1 Started
+
+$ sleep 10
+
+$ docker compose ps --format 'table {{.Service}}\t{{.Status}}\t{{.Ports}}'
+SERVICE   STATUS                    PORTS
+web       Up 10 seconds (healthy)   0.0.0.0:8092->80/tcp
+
+$ curl -sS -i http://localhost:8092/mode
+HTTP/1.1 200 OK
+Server: nginx/1.31.8
+Date: Sat, 07 Nov 2026 09:23:15 GMT
+Content-Type: text/plain
+Content-Length: 27
+Connection: keep-alive
+X-App-Mode: development
+
+mode=development listen=80
+
+$ docker compose logs web | grep envsubst
+web-1  | /docker-entrypoint.sh: Launching /docker-entrypoint.d/20-envsubst-on-templates.sh
+web-1  | 20-envsubst-on-templates.sh: Running envsubst on /etc/nginx/templates/default.conf.template to /etc/nginx/conf.d/default.conf
+
+# (2) 코드는 그대로 두고 .env 값만 바꿔 재실행
+$ cp .env.example .env
+
+$ grep -v '^#' .env
+WEB_PORT=9090
+NGINX_PORT=8088
+APP_MODE=production
+
+$ docker compose up -d
+ Container mission-env-web-1 Recreate
+ Container mission-env-web-1 Recreated
+ Container mission-env-web-1 Starting
+ Container mission-env-web-1 Started
+
+$ sleep 10
+
+$ docker compose ps --format 'table {{.Service}}\t{{.Status}}\t{{.Ports}}'
+SERVICE   STATUS                    PORTS
+web       Up 10 seconds (healthy)   80/tcp, 0.0.0.0:9090->8088/tcp
+
+$ curl -sS -i http://localhost:9090/mode
+HTTP/1.1 200 OK
+Server: nginx/1.31.8
+Date: Sat, 07 Nov 2026 09:23:25 GMT
+Content-Type: text/plain
+Content-Length: 28
+Connection: keep-alive
+X-App-Mode: production
+
+mode=production listen=8088
+
+$ curl -sS -D - -o /dev/null http://localhost:9090/ | grep -E 'HTTP/|X-App-Mode'
+HTTP/1.1 200 OK
+X-App-Mode: production
+
+$ docker compose exec web sh -c 'printenv NGINX_PORT APP_MODE; grep -E "listen|X-App-Mode" /etc/nginx/conf.d/default.conf'
+8088
+production
+    listen       8088;
+    add_header X-App-Mode "production" always;
+        return 200 "mode=production listen=8088\n";
+
+$ curl -sS http://localhost:8092/mode
+curl: (7) Failed to connect to localhost port 8092 after 0 ms: Couldn't connect to server
+
+# (3) 우선순위 확인: 셸 환경 변수 > .env
+$ APP_MODE=staging docker compose config | grep APP_MODE
+      APP_MODE: staging
+
+$ docker compose down
+ Container mission-env-web-1 Stopping
+ Container mission-env-web-1 Stopped
+ Container mission-env-web-1 Removing
+ Container mission-env-web-1 Removed
+ Network mission-env_default Removing
+ Network mission-env_default Removed
+
+$ rm .env
+~~~
+
+확인 결과:
+
+- 기본값에서는 <code>8092→80</code>, <code>mode=development</code>였고, <code>.env</code>만 바꾼 뒤에는 컨테이너가 <code>Recreate</code>되며 <code>9090→8088</code>, <code>mode=production</code>으로 바뀌었습니다. 이전 포트 8092는 더 이상 열려 있지 않습니다.
+- 컨테이너 안의 실제 Nginx 설정에 <code>listen 8088;</code>과 <code>production</code>이 들어간 것을 확인했습니다.
+- <code>APP_MODE=staging</code>처럼 셸에서 준 값이 <code>.env</code>의 <code>production</code>보다 우선했습니다.
+- <code>PORTS</code>에 남은 <code>80/tcp</code>는 Dockerfile <code>EXPOSE 80</code>의 기록일 뿐이며, 실제 공개는 <code>9090->8088</code>입니다(6절 설명과 같은 맥락).
+
+**배움 포인트: 설정과 코드의 분리**
+
+- 같은 이미지(<code>custom-nginx:1.0</code>)를 다시 빌드하지 않고 포트와 모드만 바꿨습니다. 설정이 코드 밖에 있으면 개발·운영 환경이나 PC가 달라도 이미지 하나로 대응할 수 있습니다.
+- 실제 <code>.env</code>는 PC마다 다르고 비밀값이 들어갈 수 있으므로 [.gitignore](./.gitignore)로 커밋에서 빼고, 어떤 키가 필요한지는 <code>.env.example</code>로 공유합니다. [.dockerignore](./.dockerignore)에도 <code>.env</code>를 넣어 이미지에 섞여 들어가지 않게 했습니다.
+
+### 12-5. GitHub SSH 키 설정
+
+> **실행 상태**: 이 과제는 작성자의 GitHub 계정에 공개키를 등록해야 하고, 위 클라우드 검증 환경은 외부 SSH 접속(22번 포트)이 막혀 있어 직접 실행하지 못했습니다. 아래는 작성자 PC(WSL2 Ubuntu)에서 실행할 절차와 통과 기준입니다. 실행 후 출력은 맨 아래 “실제 실행 로그” 자리에 붙입니다.
+
+HTTPS와 SSH의 차이:
+
+| 구분 | HTTPS (10절 현재 방식) | SSH |
+|---|---|---|
+| 원격 주소 | <code>https://github.com/buildergarlic/buildergarlic-codyssey.git</code> | <code>git@github.com:buildergarlic/buildergarlic-codyssey.git</code> |
+| 인증 수단 | GitHub 계정 + 토큰(Git Credential Manager가 보관) | 내 PC의 개인키 + GitHub에 등록한 공개키 |
+| 네트워크로 보내는 것 | 토큰 | 개인키는 보내지 않고, 개인키로 만든 서명만 보냄 |
+| 포트 | 443 | 22 (막힌 곳에서는 <code>ssh.github.com:443</code>) |
+| 폐기 방법 | 토큰 revoke | GitHub에서 해당 키 삭제 |
+
+재현 절차 (WSL2 Ubuntu):
+
+~~~bash
+# 1. 기존 키 확인 (id_ed25519가 이미 있으면 2단계는 건너뛰거나 다른 파일 이름 사용)
+ls -al ~/.ssh
+
+# 2. 키 생성: 저장 경로는 Enter(기본값), passphrase는 입력 권장
+ssh-keygen -t ed25519 -C "nobody@nobody.com"
+
+# 3. 권한 확인 (5절: 디렉터리 700, 개인키 600, 공개키 644)
+chmod 700 ~/.ssh
+chmod 600 ~/.ssh/id_ed25519
+chmod 644 ~/.ssh/id_ed25519.pub
+ls -ld ~/.ssh
+ls -l ~/.ssh/id_ed25519 ~/.ssh/id_ed25519.pub
+
+# 4. ssh-agent에 개인키 등록 (passphrase를 매번 입력하지 않도록)
+eval "$(ssh-agent -s)"
+ssh-add ~/.ssh/id_ed25519
+
+# 5. 공개키를 Windows 클립보드로 복사한 뒤
+#    GitHub → Settings → SSH and GPG keys → New SSH key → Key type: Authentication Key → 붙여넣기
+cat ~/.ssh/id_ed25519.pub | clip.exe
+
+# 6. 연결 테스트
+ssh -T git@github.com
+
+# 7. 원격 주소를 SSH로 바꾸고 push
+cd ~/buildergarlic-codyssey
+git remote set-url origin git@github.com:buildergarlic/buildergarlic-codyssey.git
+git remote -v
+git push -u origin main
+~~~
+
+통과 기준:
+
+| 단계 | 기대 결과 |
+|---|---|
+| 3 | <code>drwx------ … /home/&lt;사용자&gt;/.ssh</code>, 개인키 <code>-rw-------</code>, 공개키 <code>-rw-r--r--</code> |
+| 6 (처음) | <code>ED25519 key fingerprint is SHA256:+DiY3wvvV6TuJJhbpZisF/zLDA0zPMSvHdkr4UvCOqU.</code> 질문이 나오면 [GitHub 공식 값](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/githubs-ssh-key-fingerprints)과 같은지 확인한 뒤에만 <code>yes</code> |
+| 6 | <code>Hi buildergarlic! You've successfully authenticated, but GitHub does not provide shell access.</code> |
+| 7 | <code>git remote -v</code>가 <code>git@github.com:buildergarlic/buildergarlic-codyssey.git</code>를 표시하고, <code>git push</code>가 토큰·비밀번호 입력 없이 끝남 |
+
+학교·회사 네트워크에서 22번 포트가 막혀 6단계가 시간 초과되면 <code>~/.ssh/config</code>에 아래를 추가하고 다시 시도합니다([GitHub 안내](https://docs.github.com/en/authentication/troubleshooting-ssh/using-ssh-over-the-https-port)).
+
+~~~text
+Host github.com
+  Hostname ssh.github.com
+  Port 443
+  User git
+~~~
+
+**배움 포인트: 인증 방식 차이와 보안 습관**
+
+- 개인키(<code>id_ed25519</code>)는 커밋·메신저·스크린샷 어디에도 올리지 않습니다. 공유하는 것은 <code>.pub</code> 공개키뿐입니다.
+- passphrase를 걸어 두면 개인키 파일이 유출되어도 바로 쓰이지 않습니다. 입력 부담은 ssh-agent로 줄입니다.
+- 첫 접속 때 fingerprint를 공식 값과 비교하는 것은 가짜 서버(중간자 공격)를 걸러내는 단계입니다.
+- PC마다 키를 따로 만들고 GitHub 키 Title에 PC 이름을 적어 두면, PC를 잃어버리거나 바꿀 때 그 키만 삭제할 수 있습니다. 공용 실습 PC에서 만든 키는 실습 후 GitHub에서 삭제합니다.
+
+실제 실행 로그 (작성자 PC에서 6·7단계 실행 후 추가):
+
+~~~console
+(미실행 — 작성자 WSL2에서 ssh -T git@github.com, git remote -v, git push 출력을 붙여 넣습니다)
+~~~
+
+## 13. 재현 가이드 (평가자용)
+
+이 README만 보고 처음부터 같은 결과를 확인하기 위한 절차입니다.
+
+### 13-1. 준비 상태 확인
+
+| 항목 | 확인 명령 | 기준 |
+|---|---|---|
+| Docker 데몬 | <code>docker version --format '{{.Server.Version}}'</code> | 버전이 출력되면 데몬 연결 정상 (29.9.2에서 검증) |
+| Docker Compose v2 | <code>docker compose version</code> | v2 이상. 하이픈이 들어간 옛 <code>docker-compose</code>(v1)는 쓰지 않습니다. |
+| Git, curl | <code>git --version</code>, <code>curl --version</code> | 출력되면 정상 |
+| 빈 포트 | 8080, 8081, 8090, 8091, 8092, 9090 | 사용 중이면 9절 순서로 확인·해제하거나 호스트 포트만 바꿉니다. |
+
+- **Windows 11**: 2절대로 WSL2와 Docker Desktop(WSL Integration)을 설정한 뒤, PowerShell이 아니라 **WSL2 Ubuntu 터미널**에서 아래 명령을 실행합니다.
+- **macOS / Linux**: WSL2 단계는 건너뛰고 Docker Desktop·OrbStack 또는 Docker Engine + Compose 플러그인에서 같은 명령을 씁니다.
+
+### 13-2. 처음부터 따라 하기
+
+리눅스 홈 아래에 clone합니다. <code>/mnt/c</code> 아래는 권한·성능 문제가 있어 쓰지 않습니다(4·5절, 10절 Case 4).
+
+~~~bash
+cd ~
+git clone https://github.com/buildergarlic/buildergarlic-codyssey.git
+cd buildergarlic-codyssey
+docker version --format 'Client={{.Client.Version}} Server={{.Server.Version}}'
+docker compose version
+# 7절: 이미지 빌드 → 실행 → 접속
+docker build -t custom-nginx:1.0 .
+docker run -d --name web-server -p 8080:80 custom-nginx:1.0
+sleep 2
+curl -sS -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:8080
+docker rm -f web-server
+# 8절: 바인드 마운트 (실습 후 원본 복구)
+docker run -d --name bind-web -p 8081:80 -v "$(pwd)/app:/usr/share/nginx/html" custom-nginx:1.0
+sleep 2
+curl -sS http://localhost:8081 | grep Version
+sed -i 's/Version 1.0/Version 2.0 (Bind Mounted on WSL2)/' app/index.html
+curl -sS http://localhost:8081 | grep Version
+git restore app/index.html
+docker rm -f bind-web
+# 8절: 볼륨 영속성
+docker volume create mission-vol
+docker run --name vol-writer -v mission-vol:/data alpine sh -c "echo 'Persistent Data Test 123' > /data/record.txt"
+docker rm vol-writer
+docker run --rm -v mission-vol:/data alpine cat /data/record.txt
+~~~
+
+이어서 12-1 → 12-2 → 12-3 → 12-4의 “재현 명령” 블록을 순서대로 실행하고, 마지막에 13-4로 정리합니다.
+
+통과 기준:
+
+| 단계 | 통과 기준 | 근거 절 |
+|---|---|---|
+| 7절 빌드·실행 | <code>HTTP 200</code> | 7절 |
+| 바인드 마운트 | 다시 빌드하지 않아도 <code>Version 1.0</code> → <code>Version 2.0 (Bind Mounted on WSL2)</code> | 8절 |
+| 볼륨 | 기록한 컨테이너를 삭제한 뒤 새 컨테이너에서 <code>Persistent Data Test 123</code> | 8절 |
+| 12-1 | <code>curl</code> HTTP 200, <code>ps</code>에 <code>(healthy)</code>, <code>down</code> 후 빈 목록 | 12-1절 |
+| 12-2 | checker 로그 OK, <code>nslookup web</code>이 IP 응답, 호스트에서 <code>web</code>은 해석 실패 | 12-2절 |
+| 12-3 | web 중지 시 FAIL, 재시작 후 OK, <code>down</code> 후 네트워크까지 삭제 | 12-3절 |
+| 12-4 | <code>/mode</code>가 <code>development listen=80</code> → <code>production listen=8088</code>, 셸 값 <code>staging</code> 우선 | 12-4절 |
+| 12-5 | <code>ssh -T</code> 성공 메시지, SSH 원격으로 push | 12-5절 |
+
+### 13-3. 작성자 PC에 종속된 값과 대체 방법
+
+| 항목 | README에 나온 값 | 평가자 대체 방법·주의사항 |
+|---|---|---|
+| 작업 경로 | <code>/home/buildergarlic/workstation-mission</code> (4~8절 로그) | 작성자의 실습 폴더입니다. 평가자는 clone한 <code>~/buildergarlic-codyssey</code>에서 실행합니다. 명령은 저장소 루트 기준 상대경로(<code>.</code>, <code>./app</code>, <code>../..</code>)라 폴더 이름과 관계없이 동작합니다. |
+| 사용자·호스트 이름 | <code>buildergarlic@GNIA-C202-A01</code> (부록 프롬프트), 파일 소유자 <code>buildergarlic</code> | 각자 계정명으로 표시됩니다(<code>whoami</code>, <code>hostname</code>). |
+| Windows 경로 | <code>PS D:\buildergarlic-codyssey&gt;</code> (부록), 6·7·10절의 <code>PS&gt;</code> 로그 | 작성자가 D 드라이브에 clone해 PowerShell로 실행한 기록입니다. 평가는 WSL2 안의 clone을 권장합니다. PowerShell에서 8절 바인드 마운트를 하려면 <code>$(pwd)</code> 대신 <code>${PWD}</code>를 쓰고, <code>sed</code>는 없으므로 메모장 등으로 파일을 수정합니다. |
+| WSL 배포판 이름 | <code>Ubuntu-22.04</code> | <code>wsl -l -v</code>의 NAME에 나온 배포판을 Docker Desktop → Resources → WSL Integration에서 켭니다. |
+| Git 사용자 정보 | <code>buildergarlic</code> / <code>nobody@nobody.com</code>(마스킹 값) | 본인 값으로 설정합니다. 이메일 공개가 싫으면 GitHub의 noreply 주소를 씁니다. |
+| 자격 증명 도우미 | <code>/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe</code> (부록) | Git for Windows 설치 위치에 따라 다릅니다. <code>ls "/mnt/c/Program Files/Git/mingw64/bin/" \| grep credential</code>로 확인합니다. 12-5의 SSH 방식을 쓰면 필요 없습니다. |
+| 원격 저장소 권한 | <code>buildergarlic/buildergarlic-codyssey</code> | clone과 실행에는 권한이 필요 없습니다. push까지 확인하려면 본인 저장소(fork)로 <code>git remote set-url</code> 합니다. |
+| 베이스 이미지 버전 | <code>FROM nginx:alpine</code> (태그만 지정) | 태그가 가리키는 이미지는 시간이 지나면 바뀝니다. 11/04는 digest <code>785835ea…</code>, 11/07은 <code>713fc2eb…</code>였고 두 날 모두 <code>nginx/1.31.8</code>이었습니다. 완전히 같은 이미지가 필요하면 <code>FROM nginx:alpine@sha256:&lt;digest&gt;</code>로 고정합니다. |
+| 실행마다 바뀌는 값 | 컨테이너 ID, 내부 IP(<code>172.18.0.x</code>), 시각, ETag | 비교 대상이 아닙니다. 상태(<code>healthy</code>), HTTP 코드, 응답 본문을 비교합니다. |
+| 줄바꿈(CRLF) | - | Windows에서 clone하면 <code>core.autocrlf</code> 설정에 따라 줄바꿈이 CRLF로 바뀔 수 있습니다. WSL2 안에서 clone하거나 <code>git config --global core.autocrlf input</code>을 씁니다. |
+| sudo 비밀번호 | <code>sudo lsof</code> (9절) | 비밀번호를 모르면 <code>ss -ltnp</code>만으로 확인합니다. |
+| 실습실 PC 제한 | 코디세이 코딩스튜디오에서 Windows “선택적 기능” 진입 제한 (부록) | WSL2·Docker Desktop이 이미 설치된 것으로 보고 진행합니다. 개인 PC는 2절 설치 순서를 따릅니다. |
+| 네트워크 제한 | - | Docker Hub(<code>registry-1.docker.io</code> 등)나 22번 포트가 막힌 망에서는 <code>pull</code>·<code>ssh</code>가 실패합니다. 이미지 다운로드가 가능한 망에서 실행하고, SSH는 12-5의 443 포트 설정을 씁니다. |
+
+### 13-4. 실습 후 정리
+
+~~~bash
+cd ~/buildergarlic-codyssey
+docker rm -f web-server bind-web 2>/dev/null
+(cd compose/single && docker compose down)
+(cd compose/multi && docker compose down)
+(cd compose/env && docker compose down && rm -f .env)
+docker volume rm mission-vol
+docker image rm custom-nginx:1.0
+git status --short
+~~~
+
+<code>git status --short</code>가 아무것도 출력하지 않으면 저장소가 clone 직후 상태로 돌아온 것입니다. 8절 실습으로 바뀐 <code>app/index.html</code>이 남아 있다면 <code>git restore app/index.html</code>로 되돌립니다.
+
+### 13-5. 클린 clone 재현 검증 로그
+
+새 디렉터리에 저장소를 clone하고 13-2 → 12-1 → 12-2 → 12-3 → 12-4 → 13-4 명령 블록을 README에 적힌 그대로 실행했습니다(12-1~12-4의 로그가 이 실행의 출력입니다). 시작 전 Docker 이미지·컨테이너·볼륨을 모두 비운 상태였습니다.
+
+> 검증 시점에는 이번 변경분(<code>compose/</code>, <code>.gitignore</code>, <code>.dockerignore</code>, README)이 아직 GitHub에 push되지 않아, clone 직후 같은 내용을 로컬 커밋으로 반영한 뒤 진행했습니다.
+
+13-2 실행 로그:
+
+~~~console
+[2026-11-07 18:21 KST, 클라우드 Linux 검증 환경]
+
+$ cd ~
+
+$ git clone https://github.com/buildergarlic/buildergarlic-codyssey.git
+Cloning into 'buildergarlic-codyssey'...
+
+$ cd buildergarlic-codyssey
+
+$ docker version --format 'Client={{.Client.Version}} Server={{.Server.Version}}'
+Client=29.9.2 Server=29.9.2
+
+$ docker compose version
+Docker Compose version v5.7.0
+
+# 7절: 이미지 빌드 → 실행 → 접속
+$ docker build -t custom-nginx:1.0 .
+#0 building with "default" instance using docker driver
+
+#1 [internal] load build definition from Dockerfile
+#1 transferring dockerfile: 223B done
+#1 DONE 0.0s
+
+#2 [internal] load metadata for docker.io/library/nginx:alpine
+#2 DONE 1.1s
+
+#3 [internal] load .dockerignore
+#3 transferring context: 91B done
+#3 DONE 0.0s
+
+#4 [internal] load build context
+#4 transferring context: 350B done
+#4 DONE 0.0s
+
+#5 [1/2] FROM docker.io/library/nginx:alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11
+#5 resolve docker.io/library/nginx:alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11 0.0s done
+#5 … 레이어 다운로드·압축 해제 진행 표시 26줄 생략 …
+#5 DONE 1.3s
+
+#6 [2/2] COPY ./app /usr/share/nginx/html
+#6 DONE 0.1s
+
+#7 exporting to image
+#7 exporting layers 0.0s done
+#7 exporting manifest sha256:013341081c0e9fb2744c25f96325ebcf73e29fbbbcf6fce55e60c9e7bdb072bb
+#7 exporting manifest sha256:013341081c0e9fb2744c25f96325ebcf73e29fbbbcf6fce55e60c9e7bdb072bb done
+#7 exporting config sha256:2f5f0989c582dfdbaca22f314b3b33a46791b84429e407157da1368055922964 done
+#7 exporting attestation manifest sha256:21d9058b37f8ce644e566b33e42de18f9625e6ab6a577091d796c2f1261fb5c0 done
+#7 exporting manifest list sha256:95709216685f127c6bbfa6c928e576e6f0c51342bcb2ba9e7f41364e8849079c done
+#7 naming to docker.io/library/custom-nginx:1.0 done
+#7 unpacking to docker.io/library/custom-nginx:1.0
+#7 unpacking to docker.io/library/custom-nginx:1.0 0.4s done
+#7 DONE 0.5s
+
+$ docker run -d --name web-server -p 8080:80 custom-nginx:1.0
+41b288c4ba53a8129b9ea43dc01fefcdaec7b85acf8fca4692df9f54bf90d37c
+
+$ sleep 2
+
+$ curl -sS -o /dev/null -w 'HTTP %{http_code}\n' http://localhost:8080
+HTTP 200
+
+$ docker rm -f web-server
+web-server
+
+# 8절: 바인드 마운트 (실습 후 원본 복구)
+$ docker run -d --name bind-web -p 8081:80 -v "$(pwd)/app:/usr/share/nginx/html" custom-nginx:1.0
+a26ae04c101bb3fb09c670e4f8cc6522a68f4a734c82b8c28a2cf7a3d178c885
+
+$ sleep 2
+
+$ curl -sS http://localhost:8081 | grep Version
+  <p>Version 1.0</p>
+
+$ sed -i 's/Version 1.0/Version 2.0 (Bind Mounted on WSL2)/' app/index.html
+
+$ curl -sS http://localhost:8081 | grep Version
+  <p>Version 2.0 (Bind Mounted on WSL2)</p>
+
+$ git restore app/index.html
+
+$ docker rm -f bind-web
+bind-web
+
+# 8절: 볼륨 영속성
+$ docker volume create mission-vol
+mission-vol
+
+$ docker run --name vol-writer -v mission-vol:/data alpine sh -c "echo 'Persistent Data Test 123' > /data/record.txt"
+Unable to find image 'alpine:latest' locally
+latest: Pulling from library/alpine
+881fc932939e: Pulling fs layer
+881fc932939e: Already exists
+86ff264fe568: Download complete
+c35a7d82b8fa: Download complete
+Digest: sha256:3f4d6b32e26703c6082839234f43769d5046b3ac7c910033911d1e71d8cd630a
+Status: Downloaded newer image for alpine:latest
+
+$ docker rm vol-writer
+vol-writer
+
+$ docker run --rm -v mission-vol:/data alpine cat /data/record.txt
+Persistent Data Test 123
+~~~
+
+13-4 실행 로그:
+
+~~~console
+[2026-11-07 18:23 KST, 클라우드 Linux 검증 환경]
+
+$ cd ~/buildergarlic-codyssey
+
+$ docker rm -f web-server bind-web 2>/dev/null
+
+$ (cd compose/single && docker compose down)
+
+$ (cd compose/multi && docker compose down)
+
+$ (cd compose/env && docker compose down && rm -f .env)
+
+$ docker volume rm mission-vol
+mission-vol
+
+$ docker image rm custom-nginx:1.0
+Untagged: custom-nginx:1.0
+Deleted: sha256:a889a70ad8cdd8f8c1b625d8a2d10195d5c017fe68020df47e646851f333d4e0
+
+$ git status --short
+~~~
+
+13-2의 HTTP 200·바인드 마운트·볼륨 결과와 12-1~12-4의 결과가 모두 통과 기준과 일치했고, 정리 후 <code>git status --short</code>가 빈 출력이라 실습이 저장소 파일을 바꾸지 않은 상태로 끝났습니다. 남은 항목은 GitHub 계정이 필요한 12-5뿐입니다.
+
 ---
 
 ## 부록: 기존 상세 실습 로그
 
-아래에는 최초 작성 당시의 전체 명령 흐름을 당시 형태 그대로 보존했습니다. 부록은 이력 증거이며 현재 권장 절차는 위 1~10절입니다.
+아래에는 최초 작성 당시의 전체 명령 흐름을 당시 형태 그대로 보존했습니다. 부록은 이력 증거이며 현재 권장 절차는 위 1~13절입니다.
 
 > 안전 주의: 부록의 <code>git gc --prune=now</code>는 도달할 수 없는 객체를 즉시 정리해 복구 가능성을 낮출 수 있으므로 백업과 영향 검토 없이 재실행하지 않습니다. 또한 부록 마지막의 “단순 오타” 문장은 Git 사용자 설정 오류의 원인을 뜻할 뿐, 원격 <code>commit_refs</code> 오류의 원인까지 입증한 것은 아닙니다.
 

@@ -1,0 +1,20 @@
+# 보너스 4용 Nginx 설정 템플릿
+# ${NGINX_PORT}, ${APP_MODE}는 컨테이너 시작 시 환경 변수 값으로 치환됩니다.
+server {
+    listen       ${NGINX_PORT};
+    server_name  localhost;
+
+    # 모든 응답에 현재 모드를 헤더로 표시
+    add_header X-App-Mode "${APP_MODE}" always;
+
+    location / {
+        root   /usr/share/nginx/html;
+        index  index.html;
+    }
+
+    # 현재 적용된 설정값을 확인하는 엔드포인트
+    location = /mode {
+        default_type text/plain;
+        return 200 "mode=${APP_MODE} listen=${NGINX_PORT}\n";
+    }
+}

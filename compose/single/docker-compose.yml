@@ -1,0 +1,20 @@
+# 보너스 1. Docker Compose 기초 - 단일 서비스
+#
+# 7절의 아래 명령을 "문서화된 실행 설정"으로 옮긴 파일입니다.
+#   docker build -t custom-nginx:1.0 .
+#   docker run -d --name web-server -p 8080:80 custom-nginx:1.0
+#
+# 실행 위치: 이 파일이 있는 compose/single/
+#   docker compose up -d --build
+
+# 프로젝트 이름을 고정해 폴더 이름과 관계없이 컨테이너·네트워크 이름이 같게 만듭니다.
+name: mission-single
+
+services:
+  web:                      # 서비스 이름 (docker run --name 역할)
+    build:
+      context: ../..        # 저장소 루트 (docker build . 의 '.')
+      dockerfile: Dockerfile
+    image: custom-nginx:1.0 # 빌드 결과 태그 (docker build -t)
+    ports:
+      - "8090:80"           # 호스트:컨테이너 (docker run -p). 7절 8080과 겹치지 않게 8090 사용
