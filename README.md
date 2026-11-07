@@ -1,8 +1,8 @@
 # Windows 11 · WSL2 · Docker Workstation Mission
 
-Windows 11에서 WSL2와 Docker Desktop을 구성하고, Linux 파일 조작·권한 변경부터 Docker 이미지 빌드, 포트 매핑, 마운트, 볼륨 영속성, Git 연동까지 검증한 기록입니다.
+Windows 11의 WSL2 Ubuntu에 bash 명령으로 Docker Engine을 직접 설치하고, Linux 파일 조작·권한 변경부터 Docker 이미지 빌드, 포트 매핑, 마운트, 볼륨 영속성, Git 연동까지 검증한 기록입니다.
 
-> 검증 일자: 2026-11-04 (KST) · 보너스 과제·재현성 검증: 2026-11-07 (KST)
+> 검증 일자: 2026-11-04 (KST) · Ubuntu bash Docker Engine 설치(6절)·보너스 과제·재현성 검증: 2026-11-07 (KST)
 > 아래 “실제 실행 로그”에는 터미널에서 확인한 출력만 기록했습니다. 설치·장애 대응 명령은 “재현 절차”로 구분했습니다.
 > **평가자는 [13절 재현 가이드](#13-재현-가이드-평가자용)의 명령을 위에서부터 그대로 실행하면 7·8·12절 결과를 직접 확인할 수 있습니다.**
 
@@ -12,7 +12,7 @@ Windows 11에서 WSL2와 Docker Desktop을 구성하고, Linux 파일 조작·�
 |---:|---|
 | 1 | 4절: <code>mkdir</code>, <code>touch</code>, <code>cp</code>, <code>mv</code>, <code>rm</code> 실행 전후 목록과 시각 |
 | 2 | 5절: <code>chmod 755/700</code> 전후 <code>ls -ld</code> 출력 |
-| 3 | 6절: Docker Client/Server 버전, <code>docker info</code> Server 값, Engine running 화면 |
+| 3 | 6절: Ubuntu bash에서 Docker Engine 설치 로그, Client/Server 버전, <code>docker info</code> Server 값, 소켓·docker 그룹 확인 |
 | 4 | 6절: <code>docker run hello-world</code>의 <code>Hello from Docker!</code> 출력 |
 | 5 | 6절: 필터 없는 <code>docker images</code>, <code>docker ps -a</code> 출력 |
 | 6 | 7절: 저장소의 실제 [Dockerfile](./Dockerfile), 웹 소스, 성공 빌드 로그 |
@@ -34,26 +34,28 @@ Windows 11에서 WSL2와 Docker Desktop을 구성하고, Linux 파일 조작·�
 
 ## 2. 실행 환경
 
-| 구분 | 확인값 |
-|---|---|
-| Host OS | Windows 11 |
-| Linux | WSL2 · Ubuntu 22.04.5 LTS |
-| WSL2 Kernel | Linux 6.18.54.1-microsoft-standard-WSL2 |
-| Shell | GNU bash 5.1.16 |
-| Docker Desktop | 4.98.0, WSL2 backend |
-| Docker Engine | 29.9.2, linux/amd64 |
-| Git | 2.34.1 (WSL2 Ubuntu) |
+| 구분 | 작성자 PC (4·5·8절 로그, 10절 Git 로그, 화면 캡처, 2026-11-04) | 클라우드 Linux 검증 환경 (6·7절, 10절 Case 3, 12·13절 로그, 2026-11-07) |
+|---|---|---|
+| Host OS | Windows 11 | 클라우드 Linux 컨테이너 |
+| Linux | WSL2 · Ubuntu 22.04.5 LTS | Ubuntu 24.04.5 LTS |
+| Kernel | 6.18.54.1-microsoft-standard-WSL2 | 6.18.44 |
+| Shell | GNU bash 5.1.16 | GNU bash 5.2.21 |
+| Docker Engine | 29.9.2, linux/amd64 | 29.9.3 (6·7절, apt <code>docker-ce</code>) · 29.9.2 (12·13절) |
+| Docker Compose | - | v5.7.0 (<code>docker-compose-plugin</code>) |
+| Git | 2.34.1 (WSL2 Ubuntu) | 2.43.0 |
+
+Docker는 Windows 프로그램으로 설치하지 않습니다. Windows에서는 WSL2와 Ubuntu만 설치하고, Docker Engine은 **Ubuntu 터미널(bash)** 안에서 apt로 설치합니다(6-2절).
 
 최초 설치 재현 순서:
 
 ~~~powershell
-# 관리자 PowerShell
+# 1) 관리자 PowerShell: WSL2와 Ubuntu 22.04만 설치
 wsl --install -d Ubuntu-22.04
-wsl -l -v
-winget install Docker.DockerDesktop
+wsl -l -v          # Ubuntu-22.04의 VERSION이 2인지 확인
+wsl --update       # systemd를 지원하는 최신 WSL로 갱신
 ~~~
 
-Docker Desktop에서 Settings → General → Use the WSL 2 based engine과 Settings → Resources → WSL Integration → Ubuntu-22.04를 활성화한 뒤 Apply & restart를 실행합니다.
+2) 이후는 PowerShell을 닫고 **Ubuntu 터미널(bash)**에서 6-2절 0~6단계로 Docker Engine을 설치합니다.
 
 ## 3. 디렉터리 구조와 설계 기준
 
@@ -77,7 +79,6 @@ buildergarlic-codyssey/
 │           └── default.conf.template
 └── screenshots/
     ├── container-webserver.png
-    ├── docker.desktop-WSL2-Setting.png
     ├── vscode-github.png
     └── Websever-NginX-Container.png
 ~~~
@@ -92,7 +93,7 @@ buildergarlic-codyssey/
 | [compose/single/](./compose/single/docker-compose.yml) | 보너스 1: 7절 <code>docker run</code>을 Compose 파일로 옮긴 단일 서비스 |
 | [compose/multi/](./compose/multi/docker-compose.yml) | 보너스 2·3: 웹 서버 + 보조 서비스(checker) 멀티 컨테이너 |
 | [compose/env/](./compose/env/docker-compose.yml) | 보너스 4: 환경 변수로 포트·모드 변경, Nginx 설정 템플릿과 <code>.env.example</code> |
-| [screenshots/](./screenshots) | 브라우저, Docker Desktop, VS Code 검증 화면 |
+| [screenshots/](./screenshots) | 브라우저, VS Code 검증 화면 |
 | [README.md](./README.md) | 재현 절차, 실제 출력, 개념과 트러블슈팅 기록 |
 
 실행 자산([Dockerfile](./Dockerfile), [app/](./app))과 문서·증거([README.md](./README.md), [screenshots/](./screenshots))를 분리했습니다. 저장소 루트를 빌드 컨텍스트로 사용하므로 <code>docker build .</code>의 <code>COPY ./app ...</code>가 같은 구조로 동작합니다. 권한 실습용 <code>test_dir/</code>는 임시 디렉터리라 제출 구조에서 제외했습니다.
@@ -177,9 +178,326 @@ drwx------ 2 buildergarlic buildergarlic 4096 Nov  4 21:03 test_dir
 
 파일은 644 → 755, 디렉터리는 755 → 700으로 바뀌었습니다. <code>/mnt/c</code>의 NTFS/DrvFs는 설정에 따라 POSIX 권한 변경을 그대로 보존하지 않을 수 있으므로 이 검증은 WSL2의 Linux 파일 시스템에서 수행했습니다.
 
-## 6. Docker 데몬, 이미지와 컨테이너
+## 6. Ubuntu bash에서 Docker Engine 설치, 이미지와 컨테이너
 
-### 이미지와 컨테이너의 역할
+### 6-1. 설치 구성
+
+Docker는 Windows 프로그램이 아니라 WSL2 Ubuntu 안에 Linux용 Docker Engine으로 설치합니다. 아래 명령은 모두 **Ubuntu 터미널(bash)**에서 실행합니다. Ubuntu 기본 저장소의 <code>docker.io</code> 대신 Docker 공식 apt 저장소를 쓰면 최신 Engine과 Buildx·Compose 플러그인을 한 저장소에서 같은 버전 체계로 받을 수 있습니다.
+
+| 패키지 | 설치되는 것 | 역할 |
+|---|---|---|
+| <code>docker-ce</code> | <code>dockerd</code> | Docker Server(데몬). 이미지·컨테이너·네트워크·볼륨 관리 |
+| <code>docker-ce-cli</code> | <code>docker</code> | Docker Client. <code>/var/run/docker.sock</code>으로 데몬에 요청 |
+| <code>containerd.io</code> | <code>containerd</code>, <code>runc</code> | 실제 컨테이너 프로세스를 만드는 런타임 |
+| <code>docker-buildx-plugin</code> | <code>docker buildx</code> | <code>docker build</code>의 BuildKit 빌더 (7절) |
+| <code>docker-compose-plugin</code> | <code>docker compose</code> | Compose v2 (12절) |
+
+### 6-2. 설치 절차 (재현 절차)
+
+**0단계 (WSL2 전용): systemd 켜기.** <code>systemctl</code>로 Docker 서비스를 시작·자동 시작하려면 Ubuntu의 PID 1이 <code>systemd</code>여야 합니다.
+
+~~~bash
+ps -p 1 -o comm=          # systemd 가 출력되면 0단계는 건너뜁니다.
+cat /etc/wsl.conf          # 기존 설정 확인
+sudo nano /etc/wsl.conf    # 기존 내용은 두고 아래 두 줄을 추가한 뒤 저장
+~~~
+
+~~~ini
+[boot]
+systemd=true
+~~~
+
+PowerShell에서 <code>wsl --shutdown</code>을 실행한 뒤 Ubuntu 터미널을 다시 열고 <code>ps -p 1 -o comm=</code>가 <code>systemd</code>인지 확인합니다. WSL이 오래된 버전이면 먼저 <code>wsl --update</code>를 실행합니다.
+
+**1~6단계: Docker Engine 설치와 확인.**
+
+~~~bash
+# 1) 충돌할 수 있는 비공식 패키지 제거 (설치되어 있지 않으면 "is not installed" 출력)
+for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove -y $pkg; done
+
+# 2) Docker 공식 apt 저장소 등록 (GPG 키 + 저장소 주소)
+sudo apt-get update
+sudo apt-get install -y ca-certificates curl
+sudo install -m 0755 -d /etc/apt/keyrings
+sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+sudo chmod a+r /etc/apt/keyrings/docker.asc
+echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+cat /etc/apt/sources.list.d/docker.list
+sudo apt-get update
+
+# 3) Docker Engine, CLI, containerd, Buildx, Compose 설치
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+
+# 4) 데몬 시작 + WSL(부팅) 시작 시 자동 시작
+sudo systemctl enable --now docker
+systemctl is-active docker
+#    systemd를 켤 수 없는 환경이면 Ubuntu를 열 때마다: sudo service docker start
+
+# 5) sudo 없이 docker 실행: 현재 사용자를 docker 그룹에 추가
+sudo usermod -aG docker $USER
+#    그룹은 새 로그인부터 적용됩니다. Ubuntu 터미널을 모두 닫고 PowerShell에서
+#    wsl --terminate Ubuntu-22.04 실행 후 다시 엽니다. (지금 셸에서만 바로 쓰려면 newgrp docker)
+id -nG
+
+# 6) 설치 확인
+docker version
+docker info --format 'ServerVersion={{.ServerVersion}}; OperatingSystem={{.OperatingSystem}}'
+docker compose version
+docker run hello-world
+~~~
+
+| 단계 | 하는 일 | 필요한 이유 |
+|---|---|---|
+| 0 | WSL2에서 systemd 사용 | <code>docker.service</code>를 <code>systemctl</code>로 관리하고 WSL을 열 때 자동으로 데몬을 띄우기 위해 |
+| 1 | 비공식 패키지 제거 | Ubuntu 저장소의 <code>docker.io</code>·<code>containerd</code>·<code>runc</code>는 공식 패키지와 같은 파일을 설치해 충돌합니다. |
+| 2 | GPG 키·저장소 등록 | <code>signed-by</code>로 지정한 Docker 키로 서명된 패키지만 받습니다. 코드네임은 <code>/etc/os-release</code>에서 자동으로 채워집니다(22.04는 <code>jammy</code>, 24.04는 <code>noble</code>). |
+| 3 | 패키지 설치 | 6-1의 다섯 패키지. systemd 환경에서는 설치가 끝나면 <code>docker.service</code>가 바로 시작됩니다. |
+| 4 | 서비스 시작·자동 시작 | <code>dockerd</code>가 <code>/var/run/docker.sock</code>을 열어야 CLI가 연결됩니다. |
+| 5 | docker 그룹 추가 | 소켓 권한이 <code>srw-rw---- root docker</code>라서 root와 docker 그룹만 접근할 수 있습니다. |
+| 6 | 확인 | Client와 Server 구간이 모두 출력되어야 데몬 연결이 정상입니다. |
+
+> 보안 주의: docker 그룹 사용자는 컨테이너에 호스트의 <code>/</code>를 마운트할 수 있어 사실상 root 권한을 가집니다. 공용 실습 PC에서는 실습 후 <code>sudo gpasswd -d $USER docker</code>로 그룹에서 제거합니다.
+
+통과 기준:
+
+| 확인 명령 | 기대 결과 |
+|---|---|
+| <code>ps -p 1 -o comm=</code> (WSL2) | <code>systemd</code> |
+| <code>systemctl is-active docker</code> | <code>active</code> |
+| <code>cat /etc/apt/sources.list.d/docker.list</code> | <code>https://download.docker.com/linux/ubuntu jammy stable</code> (24.04는 <code>noble</code>) |
+| <code>ls -l /var/run/docker.sock</code> | <code>srw-rw---- 1 root docker …</code> |
+| <code>id -nG</code> | 출력에 <code>docker</code> 포함 |
+| <code>docker version</code> | Client와 Server 모두 <code>Docker Engine - Community</code> |
+| <code>docker info --format '{{.OperatingSystem}}'</code> | Ubuntu 이름 (WSL2에서는 <code>Ubuntu 22.04.5 LTS</code>) |
+| <code>docker compose version</code> | <code>Docker Compose version v2</code> 이상 (검증 환경 v5.7.0) |
+| <code>docker run hello-world</code> | <code>Hello from Docker!</code> |
+
+연결이 안 되면 [10절 Case 3](#case-3-ubuntu-bash에서-docker-데몬-연결-실패)의 순서로 확인합니다.
+
+### 6-3. 설치 실제 로그
+
+2026-11-07 클라우드 Linux 검증 환경(Ubuntu 24.04)에서 1~3단계를 위 명령 그대로 실행한 출력입니다. 이 환경에는 Docker 29.9.2와 공식 저장소가 이미 있어서 apt가 29.9.3으로 **업그레이드**했습니다. 처음 설치하는 PC에서는 같은 자리에 <code>newly installed</code>로 표시됩니다. 반복되는 apt 진행 표시는 <code>…</code>로 줄였습니다.
+
+~~~console
+[2026-11-07 18:37 KST, 클라우드 Linux 검증 환경, root]
+
+$ . /etc/os-release && echo "$PRETTY_NAME ($VERSION_CODENAME)"
+Ubuntu 24.04.5 LTS (noble)
+
+$ for pkg in docker.io docker-doc docker-compose docker-compose-v2 podman-docker containerd runc; do sudo apt-get remove -y $pkg; done
+Reading package lists...
+Building dependency tree...
+Reading state information...
+Package 'docker.io' is not installed, so not removed
+0 upgraded, 0 newly installed, 0 to remove and 16 not upgraded.
+   … docker-doc, docker-compose, docker-compose-v2, podman-docker, containerd, runc도 같은 형식으로 "is not installed, so not removed" …
+
+$ sudo apt-get update
+Hit:1 http://security.ubuntu.com/ubuntu noble-security InRelease
+Hit:2 https://download.docker.com/linux/ubuntu noble InRelease
+Hit:3 http://archive.ubuntu.com/ubuntu noble InRelease
+Hit:4 http://archive.ubuntu.com/ubuntu noble-updates InRelease
+Hit:5 http://archive.ubuntu.com/ubuntu noble-backports InRelease
+Reading package lists...
+
+$ sudo apt-get install -y ca-certificates curl
+Reading package lists...
+Building dependency tree...
+Reading state information...
+curl is already the newest version (8.5.0-2ubuntu10.16).
+The following packages will be upgraded:
+  ca-certificates
+1 upgraded, 0 newly installed, 0 to remove and 15 not upgraded.
+   … 다운로드·압축 해제·인증서 갱신 출력 생략 …
+
+$ sudo install -m 0755 -d /etc/apt/keyrings
+
+$ sudo curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
+
+$ sudo chmod a+r /etc/apt/keyrings/docker.asc
+
+$ echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}") stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
+
+$ cat /etc/apt/sources.list.d/docker.list
+deb [arch=amd64 signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu noble stable
+
+$ sudo apt-get update
+Hit:1 https://download.docker.com/linux/ubuntu noble InRelease
+Hit:2 http://archive.ubuntu.com/ubuntu noble InRelease
+Hit:3 http://security.ubuntu.com/ubuntu noble-security InRelease
+Hit:4 http://archive.ubuntu.com/ubuntu noble-updates InRelease
+Hit:5 http://archive.ubuntu.com/ubuntu noble-backports InRelease
+Reading package lists...
+
+$ sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+Reading package lists...
+Building dependency tree...
+Reading state information...
+containerd.io is already the newest version (2.4.2-3~ubuntu.24.04~noble).
+docker-buildx-plugin is already the newest version (0.38.1-1~ubuntu.24.04~noble).
+Suggested packages:
+  cgroupfs-mount | cgroup-lite docker-model-plugin
+Recommended packages:
+  apparmor docker-ce-rootless-extras pigz
+The following packages will be upgraded:
+  docker-ce docker-ce-cli docker-compose-plugin
+3 upgraded, 0 newly installed, 0 to remove and 12 not upgraded.
+Need to get 50.5 MB of archives.
+After this operation, 1473 kB of additional disk space will be used.
+Get:1 https://download.docker.com/linux/ubuntu noble/stable amd64 docker-ce-cli amd64 5:29.9.3-1~ubuntu.24.04~noble [17.6 MB]
+Get:2 https://download.docker.com/linux/ubuntu noble/stable amd64 docker-ce amd64 5:29.9.3-1~ubuntu.24.04~noble [24.6 MB]
+Get:3 https://download.docker.com/linux/ubuntu noble/stable amd64 docker-compose-plugin amd64 5.7.0-1~ubuntu.24.04~noble [8299 kB]
+Fetched 50.5 MB in 1s (97.4 MB/s)
+   … debconf 안내, 패키지 데이터베이스 읽기 진행 표시, "Preparing to unpack" 줄 생략 …
+Unpacking docker-ce-cli (5:29.9.3-1~ubuntu.24.04~noble) over (5:29.9.2-1~ubuntu.24.04~noble) ...
+Unpacking docker-ce (5:29.9.3-1~ubuntu.24.04~noble) over (5:29.9.2-1~ubuntu.24.04~noble) ...
+Unpacking docker-compose-plugin (5.7.0-1~ubuntu.24.04~noble) over (5.6.1-1~ubuntu.24.04~noble) ...
+Setting up docker-compose-plugin (5.7.0-1~ubuntu.24.04~noble) ...
+Setting up docker-ce-cli (5:29.9.3-1~ubuntu.24.04~noble) ...
+Setting up docker-ce (5:29.9.3-1~ubuntu.24.04~noble) ...
+invoke-rc.d: could not determine current runlevel
+invoke-rc.d: policy-rc.d denied execution of restart.
+
+$ dpkg -l docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin | tail -n 5
+ii  containerd.io         2.4.2-3~ubuntu.24.04~noble    amd64        An open and reliable container runtime
+ii  docker-buildx-plugin  0.38.1-1~ubuntu.24.04~noble   amd64        Docker Buildx plugin extends build capabilities with BuildKit.
+ii  docker-ce             5:29.9.3-1~ubuntu.24.04~noble amd64        Docker: the open-source application container engine
+ii  docker-ce-cli         5:29.9.3-1~ubuntu.24.04~noble amd64        Docker CLI: the open-source application container engine
+ii  docker-compose-plugin 5.7.0-1~ubuntu.24.04~noble    amd64        Docker Compose (V2) plugin for the Docker CLI.
+~~~
+
+- 저장소 파일에 <code>noble</code>이 자동으로 들어갔고, 패키지 5개가 모두 <code>ii</code>(설치 완료) 상태입니다.
+- 마지막 두 줄의 <code>invoke-rc.d … denied</code>는 이 검증 환경이 systemd 없는 컨테이너라 설치 후 자동 재시작이 막혔다는 뜻입니다. systemd를 켠 WSL2에서는 설치가 끝나면 <code>docker.service</code>가 자동으로 시작됩니다. 이 환경에서 데몬을 띄운 과정은 10절 Case 3에 기록했습니다.
+
+### 6-4. Docker Client와 Server(데몬) 실제 확인
+
+~~~console
+[2026-11-07 18:38 KST, 클라우드 Linux 검증 환경, 데몬 시작 직후, 시각은 UTC]
+
+$ ls -l /var/run/docker.sock
+srw-rw---- 1 root docker 0 Nov  7 09:38 /var/run/docker.sock
+
+$ docker info --format "ServerVersion={{.ServerVersion}}; OSType={{.OSType}}; OperatingSystem={{.OperatingSystem}}; Containers={{.Containers}}; Images={{.Images}}"
+ServerVersion=29.9.3; OSType=linux; OperatingSystem=Ubuntu 24.04.5 LTS; Containers=0; Images=0
+~~~
+
+~~~console
+[2026-11-07 18:39 KST, 클라우드 Linux 검증 환경, docker 그룹에 추가한 일반 사용자]
+
+$ docker version
+Client: Docker Engine - Community
+ Version:           29.9.3
+ API version:       1.56
+ Go version:        go1.26.10
+ Git commit:        5457199
+ Built:             Tue Nov  3 21:41:31 2026
+ OS/Arch:           linux/amd64
+ Context:           default
+
+Server: Docker Engine - Community
+ Engine:
+  Version:          29.9.3
+  API version:      1.56 (minimum version 1.40)
+  Go version:       go1.26.10
+  Git commit:       70efc0e
+  Built:            Tue Nov  3 21:41:31 2026
+  OS/Arch:          linux/amd64
+  Experimental:     false
+ containerd:
+  Version:          v2.4.2
+  GitCommit:        b7a25261e029d68978bbf290df0a62fc819b3c51
+ runc:
+  Version:          1.5.2
+  GitCommit:        v1.5.2-0-g29dd3dc2
+ docker-init:
+  Version:          0.19.0
+  GitCommit:        de40ad0
+
+$ docker compose version
+Docker Compose version v5.7.0
+~~~
+
+- Server 구간이 반환되었다는 것은 CLI가 <code>/var/run/docker.sock</code>을 통해 데몬에 질의를 완료했다는 뜻입니다.
+- Client·Server가 모두 <code>Docker Engine - Community</code>, <code>OperatingSystem</code>이 Ubuntu이고 <code>Context</code>가 <code>default</code>이므로, Ubuntu 안에 apt로 설치한 <code>dockerd</code>에 직접 연결된 상태입니다.
+- 소켓의 그룹이 <code>docker</code>라서 docker 그룹 사용자는 sudo 없이 접근할 수 있습니다(6-5).
+
+### 6-5. sudo 없이 docker 실행 (docker 그룹) 실제 로그
+
+~~~console
+[2026-11-07 18:38 KST, 클라우드 Linux 검증 환경]
+
+# 일반 사용자 mission: 그룹 추가 전
+$ id -nG
+mission
+
+$ docker ps
+permission denied while trying to connect to the docker API at unix:///var/run/docker.sock
+
+# 관리자 터미널
+$ sudo usermod -aG docker mission
+
+# mission으로 다시 로그인한 뒤
+$ id -nG
+mission docker
+
+$ docker ps
+CONTAINER ID   IMAGE     COMMAND   CREATED   STATUS    PORTS     NAMES
+~~~
+
+그룹을 추가해도 이미 열려 있던 셸에는 반영되지 않으므로, 다시 로그인(WSL2에서는 <code>wsl --terminate &lt;배포판&gt;</code> 후 재실행)해야 <code>id -nG</code>에 <code>docker</code>가 보입니다.
+
+### 6-6. hello-world 실제 출력
+
+~~~console
+[2026-11-07 18:40 KST, 클라우드 Linux 검증 환경, 일반 사용자]
+
+$ docker run hello-world
+
+Hello from Docker!
+This message shows that your installation appears to be working correctly.
+
+To generate this message, Docker took the following steps:
+ 1. The Docker client contacted the Docker daemon.
+ 2. The Docker daemon pulled the "hello-world" image from the Docker Hub.
+    (amd64)
+ 3. The Docker daemon created a new container from that image which runs the
+    executable that produces the output you are currently reading.
+ 4. The Docker daemon streamed that output to the Docker client, which sent it
+    to your terminal.
+   … 안내 문구(docker run -it ubuntu bash, Docker Hub 링크) 생략 …
+~~~
+
+직전에 이미지를 받아 두어서 <code>Unable to find image … Pulling</code> 줄 없이 바로 실행되었습니다. 처음 받을 때는 Docker Hub에서 <code>429 Too Many Requests</code>(익명 다운로드 횟수 제한)가 한 번 났고, 잠시 후 다시 받아 해결했습니다. 13-3절 “네트워크 제한” 참고.
+
+### 6-7. 이미지와 전체 컨테이너 목록
+
+~~~console
+[2026-11-07 18:40 KST, 클라우드 Linux 검증 환경, 일반 사용자]
+
+$ docker run -dit --name my-ubuntu ubuntu:22.04 bash
+8d65ee1e889be37de9a1890d38a0587cd334a78a3d3234f05ea26f4a85527f34
+
+$ docker stop my-ubuntu
+my-ubuntu
+
+   … 중간의 docker ps, 7절 curl·healthcheck 확인 생략 …
+
+$ docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}"
+REPOSITORY     TAG       IMAGE ID       SIZE
+custom-nginx   1.0       9d1b6be8f166   93.7MB
+ubuntu         22.04     076e7bf82319   119MB
+hello-world    latest    c567b231f656   25.9kB
+
+$ docker ps -a --format "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}\t{{.Names}}"
+CONTAINER ID   IMAGE              STATUS                                PORTS                  NAMES
+8d65ee1e889b   ubuntu:22.04       Exited (137) Less than a second ago                          my-ubuntu
+c4c4b40d4ddd   hello-world        Exited (0) 10 seconds ago                                    elastic_curie
+42b35b6a3c76   custom-nginx:1.0   Up About a minute (healthy)           0.0.0.0:8080->80/tcp   web-server
+~~~
+
+<code>custom-nginx:1.0</code>과 실행 중인 <code>web-server</code>는 7절에서 만든 것입니다. <code>docker ps -a</code>에는 종료된 컨테이너(<code>Exited</code>)까지 모두 표시됩니다. <code>Exited (137)</code>은 <code>bash</code>가 SIGTERM에 응답하지 않아 10초 뒤 SIGKILL(128+9)로 종료되었다는 뜻입니다.
+
+### 6-8. 이미지와 컨테이너의 역할
 
 Docker 이미지는 [Dockerfile](./Dockerfile)과 소스를 빌드한 읽기 전용 실행 템플릿, 즉 저장 결과입니다. 컨테이너는 그 이미지로 만든 실행 인스턴스입니다.
 
@@ -188,82 +506,13 @@ Docker 이미지는 [Dockerfile](./Dockerfile)과 소스를 빌드한 읽기 전
 - 컨테이너의 쓰기 계층을 수정해도 원본 이미지는 바뀌지 않습니다. 변경을 이미지에 포함하려면 다시 빌드해야 합니다.
 - 컨테이너를 삭제하면 쓰기 계층도 사라집니다. 보존할 데이터는 바인드 마운트나 Docker 볼륨에 둡니다.
 
-### 네트워크 네임스페이스와 포트 포워딩
+### 6-9. 네트워크 네임스페이스와 포트 포워딩
 
 컨테이너는 호스트와 분리된 네트워크 네임스페이스(IP, 인터페이스, 포트 공간)를 가집니다. 따라서 컨테이너 내부 Nginx가 TCP 80에서 대기해도 호스트에서 그 포트에 바로 접속할 수 없습니다.
 
 <code>-p 8080:80</code>은 호스트 TCP 8080 요청을 컨테이너 TCP 80으로 전달하므로 호스트에서는 <code>http://localhost:8080</code>으로 접속합니다. [Dockerfile](./Dockerfile)의 <code>EXPOSE 80</code>은 사용할 포트를 문서화할 뿐 실제로 호스트에 공개하지 않으며, 공개에는 <code>-p</code>가 필요합니다.
 
-### Docker Client와 Server(데몬) 실제 확인
-
-Docker Desktop이 엔진을 관리하므로 WSL2 내부의 <code>systemctl status docker</code> 대신 <code>docker version</code>의 Server 구간과 <code>docker info</code>의 Server 값을 확인했습니다.
-
-~~~console
-[2026-11-04 22:40 KST, PowerShell]
-
-PS> docker version
-Client:
- Version:           29.9.2
- API version:       1.56
- OS/Arch:           windows/amd64
- Context:           desktop-linux
-
-Server: Docker Desktop 4.98.0 (245422)
- Engine:
-  Version:          29.9.2
-  API version:      1.56 (minimum version 1.40)
-  OS/Arch:          linux/amd64
-  Experimental:     false
-
-PS> docker info --format "ServerVersion={{.ServerVersion}}; OSType={{.OSType}}; OperatingSystem={{.OperatingSystem}}; Containers={{.Containers}}; Images={{.Images}}"
-ServerVersion=29.9.2; OSType=linux; OperatingSystem=Docker Desktop; Containers=2; Images=4
-~~~
-
-Server 값이 반환되었다는 것은 CLI가 실제 데몬 소켓에 연결되어 질의를 완료했다는 뜻입니다.
-
-![Docker Desktop WSL2 backend와 Engine running](./screenshots/docker.desktop-WSL2-Setting.png)
-
-### hello-world 실제 출력
-
-~~~console
-[2026-11-04 KST, WSL2 Bash]
-
-$ docker run hello-world
-Unable to find image 'hello-world:latest' locally
-latest: Pulling from library/hello-world
-4f55086f7dd0: Pull complete
-d5e71e642bf5: Download complete
-Digest: sha256:c567b231f65614688711a75f31518a064258a51d442117a3e771a3a8fdba78ef
-Status: Downloaded newer image for hello-world:latest
-
-Hello from Docker!
-This message shows that your installation appears to be working correctly.
-
-To generate this message, Docker took the following steps:
- 1. The Docker client contacted the Docker daemon.
- 2. The Docker daemon pulled the "hello-world" image from the Docker Hub.
- 3. The Docker daemon created a new container from that image.
- 4. The Docker daemon streamed that output to the Docker client.
-~~~
-
-### 이미지와 전체 컨테이너 목록
-
-~~~console
-[2026-11-04 22:41:11+09:00, PowerShell]
-
-PS> docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}\t{{.Size}}"
-REPOSITORY     TAG       IMAGE ID       SIZE
-custom-nginx   1.0       cce00524d0bf   93.6MB
-ubuntu         22.04     076e7bf82319   119MB
-alpine         latest    be2656061b53   13MB
-hello-world    latest    c567b231f656   25.9kB
-
-PS> docker ps -a --format "table {{.ID}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}\t{{.Names}}"
-CONTAINER ID   IMAGE              STATUS                             PORTS                                     NAMES
-a3ed518fc940   custom-nginx:1.0   Up 27 seconds (health: starting)   0.0.0.0:8080->80/tcp, [::]:8080->80/tcp   web-server
-415d6191fc85   ubuntu:22.04       Exited (137) About an hour ago                                               my-ubuntu
-0692d7cb1287   hello-world        Exited (0) About an hour ago                                                 romantic_rhodes
-~~~
+WSL2에서는 이 “호스트”가 Ubuntu입니다. WSL2는 Ubuntu의 <code>localhost</code> 포트를 Windows로 전달하므로 Windows 브라우저에서도 <code>http://localhost:8080</code>으로 접속됩니다.
 
 ## 7. 커스텀 이미지 빌드와 포트 매핑
 
@@ -289,38 +538,47 @@ HEALTHCHECK --interval=30s --timeout=3s \
 ### 실제 빌드 로그
 
 ~~~console
-[2026-11-04T22:40:33+09:00, 저장소 루트]
+[2026-11-07 18:39 KST, 클라우드 Linux 검증 환경, 일반 사용자, ~/buildergarlic-codyssey]
 
-PS> docker build -t custom-nginx:1.0 .
-#0 building with "desktop-linux" instance using docker driver
+$ docker build -t custom-nginx:1.0 .
+#0 building with "default" instance using docker driver
 
 #1 [internal] load build definition from Dockerfile
 #1 transferring dockerfile: 223B done
 #1 DONE 0.0s
 
 #2 [internal] load metadata for docker.io/library/nginx:alpine
-#2 DONE 1.4s
+#2 DONE 1.1s
 
 #3 [internal] load .dockerignore
-#3 transferring context: 78B done
+#3 transferring context: 91B done
 #3 DONE 0.0s
 
 #4 [internal] load build context
 #4 transferring context: 350B done
 #4 DONE 0.0s
 
-#5 [1/2] FROM docker.io/library/nginx:alpine@sha256:785835ea65db4bba6f021acc0f3be91b0fef76a53fe41f8588c6698d2aed0606
-#5 CACHED
+#5 [1/2] FROM docker.io/library/nginx:alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11
+#5 resolve docker.io/library/nginx:alpine@sha256:713fc2ebfd92e8217db451477182ee91944b123d2b1ee9fd5a8c6e91ca6c3a11 0.0s done
+#5 … 레이어 다운로드·압축 해제 진행 표시 생략 …
+#5 DONE 1.3s
 
 #6 [2/2] COPY ./app /usr/share/nginx/html
-#6 DONE 0.0s
+#6 DONE 0.1s
 
 #7 exporting to image
-#7 exporting layers 0.1s done
+#7 exporting layers 0.0s done
+#7 exporting manifest sha256:12ceadb54ed146c1313a9b026d26eeee3e1c97c36e6f4fd49c5f194fd6edf9ad done
+#7 exporting config sha256:b0d84f6c4d1f9e66f9d620c69035c5999db8f8f500dd1b71d0c332ddc7b49f3e done
+#7 exporting attestation manifest sha256:4b56eefe65bef8e9077db5a42128f4489023aad4114f115632c8dc283ad80c28 done
+#7 exporting manifest list sha256:9d1b6be8f166145de069168e5c5cf3fb4589fd6b1641e5bee517f417fc42c350 done
 #7 naming to docker.io/library/custom-nginx:1.0 done
-#7 unpacking to docker.io/library/custom-nginx:1.0 done
-#7 DONE 0.2s
+#7 unpacking to docker.io/library/custom-nginx:1.0
+#7 unpacking to docker.io/library/custom-nginx:1.0 0.5s done
+#7 DONE 0.6s
 ~~~
+
+<code>#0 building with "default" instance</code>는 6절에서 설치한 Ubuntu의 기본 Docker 데몬(<code>docker-buildx-plugin</code>의 BuildKit)으로 빌드했다는 뜻입니다. <code>#3</code>의 <code>.dockerignore</code>가 적용되어 빌드 컨텍스트는 350B만 전송되었습니다.
 
 ### 매핑 명세와 재현 순서
 
@@ -346,23 +604,34 @@ docker rm web-server
 ### 호스트 포트 접속 실제 로그
 
 ~~~console
-[2026-11-04T22:40:44+09:00, PowerShell]
+[2026-11-07 18:39~18:40 KST, 클라우드 Linux 검증 환경, 일반 사용자, ~/buildergarlic-codyssey]
 
-PS> docker run -d --name web-server -p 8080:80 custom-nginx:1.0
-a3ed518fc940821d98a11e5192958af2fc0f1593291dae75db20898775d97a27
+$ docker run -d --name web-server -p 8080:80 custom-nginx:1.0
+42b35b6a3c76056348e759c66b845adce72194f19e4c5e437a119f2640ecf471
 
-PS> curl.exe -i http://localhost:8080
+$ sleep 35
+
+$ docker inspect --format "Health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" web-server
+Health=healthy
+
+   … 6절 hello-world·목록 확인 생략 …
+
+$ curl -sS -i http://localhost:8080
 HTTP/1.1 200 OK
 Server: nginx/1.31.8
-Date: Wed, 04 Nov 2026 13:40:46 GMT
+Date: Sat, 07 Nov 2026 09:40:25 GMT
 Content-Type: text/html
 Content-Length: 280
+Last-Modified: Sat, 07 Nov 2026 09:38:44 GMT
 Connection: keep-alive
+ETag: "6aeef1a4-118"
+Accept-Ranges: bytes
 
 <!doctype html>
 <html lang="ko">
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Workstation Mission</title>
 </head>
 <body>
@@ -370,12 +639,9 @@ Connection: keep-alive
   <p>Version 1.0</p>
 </body>
 </html>
-
-PS> docker inspect --format "Health={{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}" web-server
-Health=healthy
 ~~~
 
-HTTP 200과 HTML 본문, 컨테이너 healthy 상태를 모두 확인했습니다.
+HTTP 200과 HTML 본문, 컨테이너 healthy 상태를 모두 확인했습니다. Dockerfile의 <code>HEALTHCHECK</code> 간격이 30초라 첫 판정까지 35초를 기다렸습니다. WSL2에서는 같은 컨테이너를 Windows 브라우저의 <code>http://localhost:8080</code>으로도 열 수 있습니다(6-9).
 
 ![localhost 8080 Nginx 응답](./screenshots/Websever-NginX-Container.png)
 
@@ -449,24 +715,11 @@ Persistent Data Test 123
 
 <code>vol-writer</code>를 삭제한 뒤 새 <code>vol-reader</code>에서 같은 파일을 읽었으므로 데이터가 컨테이너 계층이 아니라 볼륨에 보존되었음을 확인했습니다.
 
-2026-11-04 22:41 KST에 같은 볼륨을 다시 연결해 파일 자체도 재확인했습니다.
-
-~~~console
-PS> docker volume ls --filter "name=mission-vol"
-DRIVER    VOLUME NAME
-local     mission-vol
-
-PS> docker run --rm --name vol-proof -v mission-vol:/data \
-      alpine sh -c "ls -l /data/record.txt && cat /data/record.txt"
--rw-r--r--    1 root     root            25 Nov  4 12:54 /data/record.txt
-Persistent Data Test 123
-~~~
-
 ## 9. 포트 충돌 진단과 해제
 
 <code>Bind for 0.0.0.0:8080 failed: port is already allocated</code>가 발생하면 다음 순서로 처리합니다.
 
-1. WSL2에서 리스닝 소켓과 PID를 확인합니다.
+1. Ubuntu bash에서 리스닝 소켓과 PID를 확인합니다.
 
 ~~~bash
 ss -ltnp | grep ':8080 '
@@ -599,14 +852,71 @@ git push -u origin main --force-with-lease
 
 <code>--force-with-lease</code>는 확인하지 않은 새 원격 커밋이 있으면 덮어쓰기를 거부하므로 <code>--force</code>보다 안전하지만, 원격 이력을 바꿀 수 있어 마지막 수단으로만 사용합니다. 조치 후의 원격 주소와 추적 상태는 위 실제 로그에 기록했습니다.
 
-### Case 3: WSL2에서 Docker 데몬 연결 실패
+### Case 3: Ubuntu bash에서 Docker 데몬 연결 실패
 
-~~~text
-Cannot connect to the Docker daemon at unix:///var/run/docker.sock.
-Is the docker daemon running?
+6-2절 3단계(패키지 설치) 직후, 데몬을 시작하기 전에 발생한 실제 오류와 확인 순서입니다.
+
+~~~console
+[2026-11-07 18:38 KST, 클라우드 Linux 검증 환경, root]
+
+$ docker --version
+Docker version 29.9.3, build 5457199
+
+$ docker info
+Client: Docker Engine - Community
+ Version:    29.9.3
+ Context:    default
+ Debug Mode: false
+ Plugins:
+  buildx: Docker Buildx (Docker Inc.)
+    Version:  v0.38.1
+    Path:     /usr/libexec/docker/cli-plugins/docker-buildx
+  compose: Docker Compose (Docker Inc.)
+    Version:  v5.7.0
+    Path:     /usr/libexec/docker/cli-plugins/docker-compose
+
+Server:
+failed to connect to the docker API at unix:///var/run/docker.sock; check if the path is correct and if the daemon is running: dial unix /var/run/docker.sock: connect: no such file or directory
+
+$ ls -l /var/run/docker.sock
+ls: cannot access '/var/run/docker.sock': No such file or directory
+
+$ ps -p 1 -o comm=
+process_api
+
+$ sudo service docker status
+ * Docker is not running
+
+$ sudo service docker start
+/etc/init.d/docker: 62: ulimit: error setting limit (Operation not permitted)
+
+$ sleep 3; sudo service docker status
+ * Docker is not running
 ~~~
 
-Docker Desktop의 Settings → Resources → WSL Integration에서 Ubuntu-22.04를 활성화하고 Apply & restart한 뒤 <code>docker version</code>과 <code>docker info</code>를 다시 실행합니다. 6절의 Server 출력과 Engine running 화면이 해결 후 증거입니다.
+원인 분석:
+
+1. <code>docker --version</code>과 <code>docker info</code>의 Client 구간은 정상이므로 CLI는 설치되었습니다. Server 구간만 실패하고 <code>/var/run/docker.sock</code>이 없으므로 **데몬(<code>dockerd</code>)이 실행되지 않은 상태**입니다. 이전 버전의 Docker는 같은 상황에서 <code>Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?</code>을 출력합니다.
+2. PID 1이 <code>systemd</code>가 아니므로 <code>systemctl</code>로 서비스를 시작할 수 없습니다. WSL2에서 6-2절 0단계를 하지 않았을 때와 같은 상태입니다.
+3. 이 검증 환경은 컨테이너 샌드박스라서 init 스크립트(<code>service docker start</code>)의 <code>ulimit</code> 설정까지 막혀 실패했습니다. WSL2와 일반 Ubuntu에서는 생기지 않는 제약입니다.
+
+조치:
+
+| 환경 | 조치 |
+|---|---|
+| WSL2 + systemd (권장) | <code>sudo systemctl enable --now docker</code> 후 <code>systemctl is-active docker</code>가 <code>active</code>인지 확인 |
+| WSL2, systemd를 켤 수 없음 | Ubuntu 터미널을 열 때마다 <code>sudo service docker start</code> |
+| 이 검증 환경(컨테이너) | init 스크립트를 쓸 수 없어 root로 <code>dockerd</code>를 직접 백그라운드 실행 (검증 환경 전용 대체) |
+
+조치 후 6-4절처럼 <code>/var/run/docker.sock</code>이 <code>srw-rw---- 1 root docker</code>로 생기고 <code>docker info</code>가 <code>ServerVersion=29.9.3; OSType=linux; OperatingSystem=Ubuntu 24.04.5 LTS</code>를 반환했습니다. 6-4절 출력이 해결 후 증거입니다.
+
+같은 계열의 다른 오류:
+
+| 증상 | 원인 | 확인·조치 |
+|---|---|---|
+| <code>permission denied while trying to connect to the docker API at unix:///var/run/docker.sock</code> | 현재 사용자가 docker 그룹이 아님 | <code>id -nG</code> 확인 → <code>sudo usermod -aG docker $USER</code> 후 다시 로그인 (6-5절 실제 로그) |
+| 소켓은 있는데 다른 주소로 연결을 시도함 | <code>DOCKER_HOST</code> 변수나 다른 컨텍스트가 지정됨 | <code>echo $DOCKER_HOST</code>, <code>docker context ls</code> → <code>unset DOCKER_HOST</code>, <code>docker context use default</code> |
+| <code>systemctl start docker</code> 자체가 실패 | 데몬 설정·저장소 오류 등 | <code>sudo journalctl -u docker --no-pager -n 50</code>으로 원인 확인 |
 
 ### Case 4: /mnt/c에서 chmod가 반영되지 않음
 
@@ -620,7 +930,7 @@ Windows NTFS를 WSL에 연결한 <code>/mnt/c</code>에서는 마운트 설정�
 
 ## 12. 보너스 과제 (선택)
 
-> **실행 환경 안내**: 1~11절 로그는 작성자 Windows 11 PC(WSL2 + Docker Desktop)에서, 이 절의 로그는 2026-11-07 클라우드 Linux 검증 환경(Ubuntu 24.04.5 LTS, Docker Engine 29.9.2, Docker Compose v5.7.0)에서 실제로 실행한 출력입니다. 두 환경 모두 같은 <code>nginx/1.31.8</code>이 응답했습니다. Compose 파일은 상대경로만 쓰므로 WSL2 + Docker Desktop에서도 같은 명령으로 실행됩니다.
+> **실행 환경 안내**: 4·5·8절과 10절 Git 로그는 작성자 Windows 11 PC(WSL2 Ubuntu 22.04)에서, 6·7절과 이 절의 로그는 2026-11-07 클라우드 Linux 검증 환경(Ubuntu 24.04.5 LTS, Docker Compose v5.7.0. Docker Engine은 이 절 29.9.2, 6·7절 29.9.3)에서 실제로 실행한 출력입니다. 두 환경 모두 같은 <code>nginx/1.31.8</code>이 응답했습니다. Compose 파일은 상대경로만 쓰므로 6절대로 WSL2 Ubuntu에 설치한 Docker Engine에서도 같은 명령으로 실행됩니다.
 > 실행마다 바뀌는 값(컨테이너 ID, 내부 IP, 시각, 이미지 digest)은 비교 대상이 아닙니다. 컨테이너 안의 시각은 UTC입니다.
 
 | 과제 | 사용 파일 | 호스트 포트 | 핵심 확인 |
@@ -1410,13 +1720,15 @@ Host github.com
 
 | 항목 | 확인 명령 | 기준 |
 |---|---|---|
-| Docker 데몬 | <code>docker version --format '{{.Server.Version}}'</code> | 버전이 출력되면 데몬 연결 정상 (29.9.2에서 검증) |
+| Docker 데몬 | <code>docker version --format '{{.Server.Version}}'</code> | 버전이 출력되면 데몬 연결 정상 (29.9.2·29.9.3에서 검증). 오류는 10절 Case 3 |
+| Docker 실행 권한 | <code>docker ps</code> | sudo 없이 표 머리글이 출력되면 정상. <code>permission denied</code>면 6-5절 |
 | Docker Compose v2 | <code>docker compose version</code> | v2 이상. 하이픈이 들어간 옛 <code>docker-compose</code>(v1)는 쓰지 않습니다. |
 | Git, curl | <code>git --version</code>, <code>curl --version</code> | 출력되면 정상 |
 | 빈 포트 | 8080, 8081, 8090, 8091, 8092, 9090 | 사용 중이면 9절 순서로 확인·해제하거나 호스트 포트만 바꿉니다. |
 
-- **Windows 11**: 2절대로 WSL2와 Docker Desktop(WSL Integration)을 설정한 뒤, PowerShell이 아니라 **WSL2 Ubuntu 터미널**에서 아래 명령을 실행합니다.
-- **macOS / Linux**: WSL2 단계는 건너뛰고 Docker Desktop·OrbStack 또는 Docker Engine + Compose 플러그인에서 같은 명령을 씁니다.
+- **Windows 11**: 2절대로 WSL2 Ubuntu를 설치하고, Ubuntu 터미널에서 6-2절 0~6단계로 Docker Engine을 설치한 뒤, PowerShell이 아니라 **WSL2 Ubuntu 터미널**에서 아래 명령을 실행합니다. Docker가 Ubuntu 안에 있으므로 PowerShell에서는 <code>docker</code> 명령을 쓸 수 없습니다.
+- **Ubuntu (WSL 아님)**: 6-2절 1~6단계(0단계 제외)를 그대로 실행한 뒤 같은 명령을 씁니다.
+- **macOS**: Linux용 Docker Engine을 직접 설치할 수 없으므로 OrbStack 등 Docker 호환 런타임을 설치한 뒤 같은 명령을 씁니다.
 
 ### 13-2. 처음부터 따라 하기
 
@@ -1468,19 +1780,22 @@ docker run --rm -v mission-vol:/data alpine cat /data/record.txt
 
 | 항목 | README에 나온 값 | 평가자 대체 방법·주의사항 |
 |---|---|---|
-| 작업 경로 | <code>/home/buildergarlic/workstation-mission</code> (4~8절 로그) | 작성자의 실습 폴더입니다. 평가자는 clone한 <code>~/buildergarlic-codyssey</code>에서 실행합니다. 명령은 저장소 루트 기준 상대경로(<code>.</code>, <code>./app</code>, <code>../..</code>)라 폴더 이름과 관계없이 동작합니다. |
+| 작업 경로 | <code>/home/buildergarlic/workstation-mission</code> (4·5·8절 로그) | 작성자의 실습 폴더입니다. 평가자는 clone한 <code>~/buildergarlic-codyssey</code>에서 실행합니다. 명령은 저장소 루트 기준 상대경로(<code>.</code>, <code>./app</code>, <code>../..</code>)라 폴더 이름과 관계없이 동작합니다. |
 | 사용자·호스트 이름 | <code>buildergarlic@GNIA-C202-A01</code> (부록 프롬프트), 파일 소유자 <code>buildergarlic</code> | 각자 계정명으로 표시됩니다(<code>whoami</code>, <code>hostname</code>). |
-| Windows 경로 | <code>PS D:\buildergarlic-codyssey&gt;</code> (부록), 6·7·10절의 <code>PS&gt;</code> 로그 | 작성자가 D 드라이브에 clone해 PowerShell로 실행한 기록입니다. 평가는 WSL2 안의 clone을 권장합니다. PowerShell에서 8절 바인드 마운트를 하려면 <code>$(pwd)</code> 대신 <code>${PWD}</code>를 쓰고, <code>sed</code>는 없으므로 메모장 등으로 파일을 수정합니다. |
-| WSL 배포판 이름 | <code>Ubuntu-22.04</code> | <code>wsl -l -v</code>의 NAME에 나온 배포판을 Docker Desktop → Resources → WSL Integration에서 켭니다. |
+| Windows 경로 | <code>PS D:\buildergarlic-codyssey&gt;</code> (부록), 10절의 <code>PS&gt;</code> 로그 | 작성자가 D 드라이브에 clone해 PowerShell로 Git 명령을 실행한 기록입니다. Docker Engine은 Ubuntu 안에 설치되므로 Docker 명령은 모두 WSL2 Ubuntu 터미널에서, WSL2 홈 아래 clone한 저장소에서 실행합니다. |
+| WSL 배포판 이름 | <code>Ubuntu-22.04</code> | <code>wsl -l -v</code>의 NAME과 VERSION 2를 확인하고 <code>wsl -d &lt;NAME&gt;</code>으로 들어가 6-2절을 실행합니다. 6-2절 5단계의 <code>wsl --terminate</code>에도 이 NAME을 씁니다. |
+| Docker 저장소 코드네임 | <code>noble</code> (6-3절, Ubuntu 24.04) | WSL2 Ubuntu 22.04에서는 같은 명령이 <code>jammy</code>를 자동으로 넣습니다. 직접 입력하지 않습니다. |
+| docker 그룹 사용자 | <code>mission</code> (6-5절 검증용 사용자) | 본인 계정에 <code>sudo usermod -aG docker $USER</code>를 적용합니다. 공용 PC는 실습 후 <code>sudo gpasswd -d $USER docker</code>로 제거합니다. |
+| 데몬 시작 방법 | 검증 환경은 <code>dockerd</code> 직접 실행 (10절 Case 3) | 컨테이너 샌드박스 전용 대체입니다. WSL2에서는 <code>sudo systemctl enable --now docker</code>를 씁니다. |
 | Git 사용자 정보 | <code>buildergarlic</code> / <code>nobody@nobody.com</code>(마스킹 값) | 본인 값으로 설정합니다. 이메일 공개가 싫으면 GitHub의 noreply 주소를 씁니다. |
 | 자격 증명 도우미 | <code>/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe</code> (부록) | Git for Windows 설치 위치에 따라 다릅니다. <code>ls "/mnt/c/Program Files/Git/mingw64/bin/" \| grep credential</code>로 확인합니다. 12-5의 SSH 방식을 쓰면 필요 없습니다. |
 | 원격 저장소 권한 | <code>buildergarlic/buildergarlic-codyssey</code> | clone과 실행에는 권한이 필요 없습니다. push까지 확인하려면 본인 저장소(fork)로 <code>git remote set-url</code> 합니다. |
-| 베이스 이미지 버전 | <code>FROM nginx:alpine</code> (태그만 지정) | 태그가 가리키는 이미지는 시간이 지나면 바뀝니다. 11/04는 digest <code>785835ea…</code>, 11/07은 <code>713fc2eb…</code>였고 두 날 모두 <code>nginx/1.31.8</code>이었습니다. 완전히 같은 이미지가 필요하면 <code>FROM nginx:alpine@sha256:&lt;digest&gt;</code>로 고정합니다. |
+| 베이스 이미지 버전 | <code>FROM nginx:alpine</code> (태그만 지정) | 태그가 가리키는 이미지는 시간이 지나면 바뀝니다. 11/04(부록 Step 4)는 digest <code>785835ea…</code>, 11/07(7·13-5절)은 <code>713fc2eb…</code>였고 두 날 모두 <code>nginx/1.31.8</code>이었습니다. 완전히 같은 이미지가 필요하면 <code>FROM nginx:alpine@sha256:&lt;digest&gt;</code>로 고정합니다. |
 | 실행마다 바뀌는 값 | 컨테이너 ID, 내부 IP(<code>172.18.0.x</code>), 시각, ETag | 비교 대상이 아닙니다. 상태(<code>healthy</code>), HTTP 코드, 응답 본문을 비교합니다. |
 | 줄바꿈(CRLF) | - | Windows에서 clone하면 <code>core.autocrlf</code> 설정에 따라 줄바꿈이 CRLF로 바뀔 수 있습니다. WSL2 안에서 clone하거나 <code>git config --global core.autocrlf input</code>을 씁니다. |
-| sudo 비밀번호 | <code>sudo lsof</code> (9절) | 비밀번호를 모르면 <code>ss -ltnp</code>만으로 확인합니다. |
-| 실습실 PC 제한 | 코디세이 코딩스튜디오에서 Windows “선택적 기능” 진입 제한 (부록) | WSL2·Docker Desktop이 이미 설치된 것으로 보고 진행합니다. 개인 PC는 2절 설치 순서를 따릅니다. |
-| 네트워크 제한 | - | Docker Hub(<code>registry-1.docker.io</code> 등)나 22번 포트가 막힌 망에서는 <code>pull</code>·<code>ssh</code>가 실패합니다. 이미지 다운로드가 가능한 망에서 실행하고, SSH는 12-5의 443 포트 설정을 씁니다. |
+| sudo 비밀번호 | 6-2절 설치, <code>sudo lsof</code> (9절) | Docker Engine 설치에는 Ubuntu 계정의 sudo 비밀번호가 필요합니다(Windows 관리자 권한은 필요 없음). 9절은 비밀번호를 모르면 <code>ss -ltnp</code>만으로 확인합니다. |
+| 실습실 PC 제한 | 코디세이 코딩스튜디오에서 Windows “선택적 기능” 진입 제한 (부록) | WSL2·Ubuntu가 이미 설치된 것으로 보고 진행합니다. Docker Engine은 Windows 설정 없이 Ubuntu 안에서 6-2절로 설치합니다. 개인 PC는 2절 설치 순서를 따릅니다. |
+| 네트워크 제한 | Docker Hub <code>429 Too Many Requests</code> (6-6절) | <code>download.docker.com</code>(6-2절 apt 설치), Docker Hub(<code>registry-1.docker.io</code> 등), 22번 포트가 막힌 망에서는 설치·<code>pull</code>·<code>ssh</code>가 실패합니다. 접속 가능한 망에서 실행하고, SSH는 12-5의 443 포트 설정을 씁니다. <code>429</code>는 익명 다운로드 횟수 제한이므로 잠시 후 다시 시도하거나 <code>docker login</code> 후 받습니다. |
 
 ### 13-4. 실습 후 정리
 
@@ -1642,7 +1957,7 @@ $ git status --short
 
 ## 부록: 기존 상세 실습 로그
 
-아래에는 최초 작성 당시의 전체 명령 흐름을 당시 형태 그대로 보존했습니다. 부록은 이력 증거이며 현재 권장 절차는 위 1~13절입니다.
+아래에는 최초 작성 당시의 전체 명령 흐름을 보존했습니다. 단, Docker 설치·연동 부분은 본문 6절의 Ubuntu bash 설치 방식에 맞춰 정리했습니다. 부록은 이력 증거이며 현재 권장 절차는 위 1~13절입니다.
 
 > 안전 주의: 부록의 <code>git gc --prune=now</code>는 도달할 수 없는 객체를 즉시 정리해 복구 가능성을 낮출 수 있으므로 백업과 영향 검토 없이 재실행하지 않습니다. 또한 부록 마지막의 “단순 오타” 문장은 Git 사용자 설정 오류의 원인을 뜻할 뿐, 원격 <code>commit_refs</code> 오류의 원인까지 입증한 것은 아닙니다.
 
@@ -1652,7 +1967,7 @@ $ git status --short
 ## 1. 실행환경
 | **OS** | Windows 11 (WSL2 - Ubuntu 22.04.x LTS, Kernel 5.15.x / 6.6.x) |
 | **Shell / Terminal** | GNU bash 5.1.16 (Windows Terminal + VSCode Remote-WSL Terminal) |
-| **Container Engine** | Docker Desktop for Windows (WSL2 Backend Engine) v27.x.x |
+| **Container Engine** | Docker Engine 29.9.2 (linux/amd64). 권장 설치 절차는 본문 6-2절 (Ubuntu bash, apt) |
 | **Git Version** | git version 2.34.1 (WSL2 Ubuntu 내장 Git) |
 
 
@@ -1670,22 +1985,22 @@ $ git status --short
 
 ## 3. 설치 진행과 수행 로그(핵심 발췌)
 1. Windows 11 사전 환경 세팅 (PowerShell 관리자 권한)
-WSL2와 Docker Desktop이 아직 설치되지 않았거나 연동 설정이 안 된 경우 아래 절차를 먼저 수행합니다.
+WSL2와 Ubuntu가 아직 설치되지 않은 경우 아래 절차를 먼저 수행합니다. Docker는 Windows가 아니라 WSL2 Ubuntu 안에 설치합니다.
 
 1-1. WSL2 활성화
 wsl --install --no-distribution
-백엔드 엔진만 활성화
+WSL2 기능만 먼저 활성화 (Ubuntu 배포판은 1-2에서 설치)
 
 1-1-1. 왜 WSL 설치?
-- Windows 11에서 Windows용 Docker Desktop을 설치할 때 WSL2(Windows Subsystem for Linux 2)는 사실상 필수입니다. 단, 사용자가 직접 Ubuntu 배포판을 따로 설치할 필요는 없습니다.
+- Windows 11에서 Docker를 쓰려면 WSL2(Windows Subsystem for Linux 2)로 실제 Linux(Ubuntu)를 띄우고, 그 Ubuntu 안에 Linux용 Docker Engine을 설치합니다. 따라서 Ubuntu 배포판 설치가 필수입니다.
 - 도커의 태생적 구조: 도커 컨테이너(Linux 컨테이너)는 Linux 커널의 핵심 기능(Cgroups, Namespaces)을 공유하여 작동합니다. Windows 커널에는 이 기능이 직접 들어있지 않으므로, 백그라운드에서 경량 Linux 커널을 띄워줄 가상화 계층(WSL2)이 반드시 필요합니다.
 
 - Windows의 기본 파일 시스템(NTFS)이나 Git Bash(MinGW)에서는 리눅스의 8진수 권한(chmod 700 등)이 정상적으로 반영되지 않아 과제 검증(요구사항 4-3)에서 결함이 발생합니다. 또한 WSL2의 /mnt/c/... 경로(Windows 호스트 마운트 경로)에서 작업할 경우에도 권한 변경이 무시되거나 Docker 바인드 마운트 I/O 성능 저하가 발생하므로, 반드시 WSL2 내부의 리눅스 네이티브 홈 디렉토리(~ 또는 /home/<계정명>)에서 모든 실습을 진행해야 합니다.
-*(참고: 미션 안내문의 OrbStack은 macOS 전용 도구이므로, Windows 11에서는 Docker Desktop (WSL2 백엔드 모드)*으로 대체하여 구동합니다.)
+*(참고: 미션 안내문의 OrbStack은 macOS 전용 도구이므로, Windows 11에서는 WSL2 Ubuntu에 Docker Engine을 직접 설치해 구동합니다.)*
 
 1-1-2. WSL vs WSL2
 - WSL 1은 윈도우가 리눅스 흉내를 내는 번역기라면, WSL 2는 윈도우 안에 진짜 리눅스 커널을 통째로 집어넣은 가상 머신입니다.
-- Docker를 구축할 때 WSL 2는 별도 설정 없이 완벽하게 기본 지원하지만, WSL 1은 아키텍처 한계로 Docker를 정상적으로 구동할 수 없습니다.
+- WSL 2는 실제 Linux 커널이 있어 Ubuntu 안에 Docker Engine을 그대로 설치·실행할 수 있지만, WSL 1은 아키텍처 한계로 Docker 데몬을 정상적으로 구동할 수 없습니다.
 
 1-1-3. WSL2 (경량 Hyper-V 기반)
 1) 윈도우즈 Hyper-V 설치 필요
@@ -1697,7 +2012,7 @@ wsl --install --no-distribution
 **코디세이 코딩스튜디오에서는 실행 안됨.(설정 진입 막혀 있음)
 **설치된 것을 가정하고 진행한다.
 
-1-2. Docker Desktop for Windows 설치
+1-2. WSL2 Ubuntu와 Docker Engine 설치
 2-2-1. Docker 왜 설치?
 "내 컴퓨터에서는 잘 돌아가는데, 서버나 다른 사람 컴퓨터에서는 왜 안 되지?"(일명 "It works on my machine") 문제를 원천 차단하기 위함입니다.
 
@@ -1710,14 +2025,16 @@ wsl --install -d Ubuntu-22.04
 # 설치 및 재부팅 후 WSL 버전이 2인지 확인 (VERSION이 2여야 함)
 wsl -l -v
 
-2) Docker Desktop 설치 및 WSL2 통합 설정
-2-1) PowerShell에서 Winget으로 설치하거나 공식 홈페이지에서 설치합니다.
-[PowerShell]
-winget install Docker.DockerDesktop
-
-2-2) Docker Desktop 실행 후 필수 설정 확인:
-- Settings (톱니바퀴) -> General -> Use the WSL 2 based engine 체크 확인
-- Settings -> Resources -> WSL Integration -> Enable integration with my default WSL distro 체크 및 Ubuntu-22.04 토글 활성화 -> Apply & restart 클릭
+2) Ubuntu bash에서 Docker Engine 설치
+Ubuntu 터미널을 열고 본문 6-2절 0~6단계를 그대로 실행합니다. 핵심 흐름:
+[Bash]
+# 0. systemd 확인 (systemd가 아니면 /etc/wsl.conf에 [boot] systemd=true 추가 → PowerShell에서 wsl --shutdown)
+ps -p 1 -o comm=
+# 1~3. 충돌 패키지 제거 → Docker 공식 apt 저장소 등록(6-2절 2단계) → 설치
+sudo apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+# 4~5. 서비스 시작·자동 시작, sudo 없이 쓰도록 docker 그룹 추가 (다시 로그인 후 적용)
+sudo systemctl enable --now docker
+sudo usermod -aG docker $USER
 
 3) VSCode 확장 프로그램 설치 (Windows 호스트)
 VSCode를 열고 아래 확장(Extension)을 설치해야 WSL 내부 폴더를 직접 열고 GitHub 연동을 캡처할 수 있습니다.
@@ -1846,7 +2163,7 @@ drwx------ 2 buildergarlic buildergarlic 4096 Nov  4 21:03 test_dir
 
 ## Step 3: Docker 설치 점검 및 기본 운영 명령 (요구사항 4-4, 4-5, 4-6)
 
-# 버전 및 데몬 동작 점검 (Docker Desktop WSL Integration이 켜져 있어야 동작함)
+# 버전 및 데몬 동작 점검 (본문 6-2절대로 Docker Engine을 설치하고 docker 서비스가 실행 중이어야 동작함)
 docker --version
 buildergarlic@GNIA-C202-A01:~/workstation-mission$ docker --version
 Docker version 29.9.2, build a82e528
@@ -1858,26 +2175,7 @@ Client:
  Context:    default
  Debug Mode: false
  Plugins:
-  agent: Docker AI Agent Runner (Docker Inc.)
-    Version:  v1.152.0
-    Path:     /usr/local/lib/docker/cli-plugins/docker-agent
-  ai: Docker AI Agent - Ask Gordon (Docker Inc.)
-    Version:  v1.33.0
-    Path:     /usr/local/lib/docker/cli-plugins/docker-ai
-  buildx: Docker Buildx (Docker Inc.)
-    Version:  v0.38.1
-    Path:     /usr/local/lib/docker/cli-plugins/docker-buildx
-  compose: Docker Compose (Docker Inc.)
-    Version:  v5.6.1
-    Path:     /usr/local/lib/docker/cli-plugins/docker-compose
-  debug: Get a shell into any image or container (Docker Inc.)
-    Version:  0.49.0
-    Path:     /usr/local/lib/docker/cli-plugins/docker-debug
-  desktop: Docker Desktop commands (Docker Inc.)
-    Version:  4.98.0
-    Path:     /usr/local/lib/docker/cli-plugins/docker-desktop
-  dhi: CLI for managing Docker Hardened Images (Docker Inc.)
-    Version:  v0.0.9
+  … 플러그인 목록 생략 (설치 방식에 따라 다름. Ubuntu apt 설치 기준 출력은 본문 10절 Case 3) …
 
 # hello-world 실행
 docker run hello-world
@@ -2255,11 +2553,8 @@ code .
 * **확인 절차:** `df -T .` 명령어로 파일 시스템 타입을 확인한 결과 `/mnt/c` 경로는 `9p` (drvfs)로 마운트되어 있었고, WSL 고유 홈 디렉토리(`~`)는 리눅스 네이티브 파일 시스템인 `ext4`로 구성된 것을 확인함.
 * **해결 및 대안:** 작업 디렉토리를 `/mnt/c/...`에서 리눅스 네이티브 파일 시스템 영역인 `/home/<사용자>/workstation-mission`(`~/workstation-mission`)으로 이전하여 실습을 재수행함. 이후 `chmod 755`, `chmod 700`이 정확히 반영됨을 확인함(추후 Docker 바인드 마운트 시의 파일 I/O 속도 저하 문제도 동시에 예방).
 
-### Case 2: WSL2 Ubuntu 터미널에서 `docker info` 실행 시 데몬 연결 실패 (`Cannot connect to the Docker daemon`)
-* **문제 현상:** Windows 11에 Docker Desktop을 설치한 후 WSL2 Ubuntu 터미널에서 `docker info`를 입력하자 `Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?` 에러가 발생함.
-* **원인 가설:** Windows 호스트에서 Docker Desktop은 실행 중이지만, 현재 접속한 WSL2 배포판(Ubuntu-22.04)과의 소켓 브리지(WSL Integration) 옵션이 비활성화되어 있어 WSL 내부 CLI가 호스트의 Docker 엔진을 찾지 못하는 것으로 추정.
-* **확인 절차:** `ls -l /var/run/docker.sock`을 조회했을 때 소켓 파일이 존재하지 않았고, Docker Desktop의 `Settings > Resources > WSL Integration` 메뉴를 확인한 결과 `Ubuntu-22.04` 배포판 토글이 꺼져 있음을 확인함.
-* **해결 및 대안:** Docker Desktop 설정에서 `Ubuntu-22.04` 통합 옵션을 활성화하고 `Apply & restart`를 수행함. 이후 WSL2 터미널에서 별도의 데몬 설치 없이 `/var/run/docker.sock`이 정상 연결되어 `docker --version` 및 `docker info`가 정상 출력됨을 확인함.
+### Case 2: Docker 데몬 연결 실패 (`Cannot connect to the Docker daemon`)
+본문 10절 Case 3에 Ubuntu bash Docker Engine 기준의 실제 오류·원인·조치로 정리했습니다.
 
 ### Case 3: git user setting Error
 #git user setting 
